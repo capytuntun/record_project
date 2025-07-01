@@ -1,0 +1,9 @@
+pyautogui==0.9.54
+opencv-python==4.8.1.78
+numpy==1.26.1
+screeninfo==0.8.1
+Flask==3.0.0
+mss==9.0.1
+logging==0.4.9.6
+ping3==4.0.8
+psutil==6.0.0
