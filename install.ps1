@@ -47,6 +47,28 @@ add-LocalGroupMember -Group "Administrators" -Member "pcinfoadmin"
 echo "將user移出管理員群組"
 Remove-LocalGroupMember -Group "Administrators" -Member $env:USERNAME
 
+$userName = "user"
+
+# 檢查該帳號是否存在
+$existingUser = Get-LocalUser -Name $userName -ErrorAction SilentlyContinue
+
+# 如果帳號不存在，則創建帳號
+if (-not $existingUser) {
+    Write-Host "使用者帳號不存在，正在創建帳號..."
+    # 創建新帳號
+    New-LocalUser -Name $userName -Password (ConvertTo-SecureString "1qaz@WSX" -AsPlainText -Force) -FullName "User Account" -Description "Created via script"
+    Write-Host "帳號創建完成：$userName"
+}
+
+# 檢查該帳號是否在管理員群組內
+if (Get-LocalGroupMember -Group "Administrators" | Where-Object { $_.Name -eq $userName }) {
+    Write-Host "將 $userName 移出管理員群組..."
+    Remove-LocalGroupMember -Group "Administrators" -Member $userName
+    Write-Host "$userName 已被移出管理員群組"
+} else {
+    Write-Host "$userName 不在管理員群組內"
+}
+
 echo "將user加入Users群組" 
 Add-LocalGroupMember -Group "Users" -Member $env:USERNAME
 
