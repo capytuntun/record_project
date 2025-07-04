@@ -40,7 +40,7 @@ else:
 
     # Specify name of Output file
 
-    directory_test = r'\\192.168.7.90\videos\{}'.format(ip_address.replace('.', '_'))
+    directory_test = r'\\192.168.63.200\Ret\{}'.format(ip_address.replace('.', '_'))
     if not os.path.exists(directory_test):
         try:
             os.makedirs(directory_test)
@@ -51,7 +51,7 @@ else:
     else:
         print(f"目錄 '{directory_test}' 已經存在")
     filename_stamp = username + '_' + ip_address.replace('.', '_') + '_' + formatted_datetime
-    filename = f"\\\\192.168.7.90\\videos\\{ip_address.replace('.', '_')}\\{filename_stamp}.avi"
+    filename = f"\\\\192.168.63.200\\Ret\\{ip_address.replace('.', '_')}\\{filename_stamp}.avi"
     fps = 20.0
     out = cv2.VideoWriter(filename, codec, fps, resolution)
     cv2.namedWindow("Live", cv2.WINDOW_GUI_NORMAL)
