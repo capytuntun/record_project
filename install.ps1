@@ -30,7 +30,7 @@ Copy-Item $PSScriptRoot\code\python_recorder.py C:\Users\Public\python_script
 Copy-Item $PSScriptRoot\code\app.py C:\Users\Public\python_script
 
 echo "複製腳本"
-Copy-Item $PSScriptRoot\script\StartRecord.ps1 D:\StartRecord.ps1
+Copy-Item $PSScriptRoot\StartRecord.ps1 D:\StartRecord.ps1
 
 
 echo "建立開機繳腳本"
