@@ -18,7 +18,7 @@ def check_ip_status(ip):
     return result is not None
 def show_warning(message):
     ctypes.windll.user32.MessageBoxW(0, message, "警告", 0x30)
-ip_to_check = "192.168.7.90"
+ip_to_check = "192.168.63.200"
 if not check_ip_status(ip_to_check):
     show_warning("NAS無法連線")
 else:
