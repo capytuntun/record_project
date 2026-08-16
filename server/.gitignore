@@ -1,0 +1,17 @@
+.env
+*.db
+*.sqlite3
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+instance/
+
+# Generated installer packages contain live enrollment tokens.
+instance/packages/
+
+# Recording storage (encrypted screen recordings — sensitive).
+instance/recordings/
+# Bundled FFmpeg binary (~98MB) — fetch per environment.
+tools/ffmpeg/

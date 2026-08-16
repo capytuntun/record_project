@@ -1,0 +1,18 @@
+Flask==3.1.0
+Flask-SQLAlchemy==3.1.1
+Flask-Migrate==4.0.7
+# 2.0.44+ is required on Python 3.14: earlier releases break on the
+# typing.Union changes when resolving `Mapped[X | None]` annotations.
+SQLAlchemy>=2.0.44
+argon2-cffi==23.1.0
+PyJWT==2.10.1
+python-dotenv==1.0.1
+Flask-Limiter==3.9.2
+flask-sock==0.7.0
+cryptography>=44
+# SMB/CIFS storage target (NAS). Pure-Python SMB2/3 client.
+smbprotocol==1.17.0
+pytest==8.3.4
+websocket-client==1.8.0
+# Test-only: an in-process FTP server for the storage round-trip tests.
+pyftpdlib==2.2.0

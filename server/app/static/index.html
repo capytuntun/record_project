@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>螢幕測錄系統</title>
+<link rel="stylesheet" href="/static/console.css">
+</head>
+<body>
+
+<!-- 載入中：復原連線階段時顯示，避免登入畫面閃現 -->
+<section id="booting" class="login-wrap" hidden>
+  <div class="booting-spinner" aria-label="載入中"></div>
+</section>
+
+<!-- ── 登入 ───────────────────────────────────────────── -->
+<section id="login-view" class="login-wrap">
+  <form id="login-form" class="login-card" autocomplete="on">
+    <div class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2.5 4 6v6c0 4.6 3.2 8.4 8 9.5 4.8-1.1 8-4.9 8-9.5V6z"/>
+        <path d="m9 12 2 2 4-4"/>
+      </svg>
+    </div>
+    <h1>螢幕測錄系統</h1>
+    <p class="sub">僅限企業授權管理員使用。所有登入嘗試都會留下稽核紀錄。</p>
+
+    <label for="login-username">帳號</label>
+    <input id="login-username" name="username" autocomplete="username"
+           autocapitalize="off" spellcheck="false" required>
+
+    <label for="login-password">密碼</label>
+    <input id="login-password" name="password" type="password"
+           autocomplete="current-password" required>
+
+    <button type="submit" id="login-submit" class="primary">登入</button>
+    <p id="login-error" class="alert bad" hidden></p>
+  </form>
+</section>
+
+<!-- ── 主控台 ─────────────────────────────────────────── -->
+<section id="app-view" class="shell" hidden>
+
+  <aside class="sidebar">
+    <div class="side-brand">
+      <span class="brand-mark sm" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2.5 4 6v6c0 4.6 3.2 8.4 8 9.5 4.8-1.1 8-4.9 8-9.5V6z"/>
+          <path d="m9 12 2 2 4-4"/>
+        </svg>
+      </span>
+      <span class="side-title">螢幕測錄系統</span>
+    </div>
+
+    <nav class="side-nav">
+      <button class="nav-item" data-view="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="9" rx="1.5"/>
+          <rect x="14" y="3" width="7" height="5" rx="1.5"/>
+          <rect x="14" y="12" width="7" height="9" rx="1.5"/>
+          <rect x="3" y="16" width="7" height="5" rx="1.5"/>
+        </svg><span>總覽</span>
+      </button>
+      <button class="nav-item" data-view="endpoints">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2.5" y="4" width="19" height="12" rx="2"/>
+          <path d="M8 20h8M12 16v4"/>
+        </svg><span>端點</span>
+      </button>
+      <button class="nav-item" data-view="wall" data-perm="screen:wall:view">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3.5" width="7.5" height="7.5" rx="1.3"/>
+          <rect x="13.5" y="3.5" width="7.5" height="7.5" rx="1.3"/>
+          <rect x="3" y="13" width="7.5" height="7.5" rx="1.3"/>
+          <rect x="13.5" y="13" width="7.5" height="7.5" rx="1.3"/>
+        </svg><span>螢幕牆</span>
+      </button>
+      <button class="nav-item" data-view="users">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="9" cy="8" r="3.2"/>
+          <path d="M2.8 20a6.2 6.2 0 0 1 12.4 0"/>
+          <path d="M16.5 5.2a3.2 3.2 0 0 1 0 5.6M18 20a6.3 6.3 0 0 0-1.6-4.2"/>
+        </svg><span>管理員</span>
+      </button>
+      <button class="nav-item" data-view="groups" data-perm="groups:manage">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="7" cy="8" r="2.6"/><circle cx="17" cy="8" r="2.6"/>
+          <path d="M2.5 19a4.5 4.5 0 0 1 9 0M12.5 19a4.5 4.5 0 0 1 9 0"/>
+        </svg><span>群組</span>
+      </button>
+      <button class="nav-item" data-view="recordings" data-perm="recordings:manage">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2.5" y="5" width="19" height="14" rx="2"/>
+          <circle cx="12" cy="12" r="3.2"/>
+        </svg><span>錄影</span>
+      </button>
+      <button class="nav-item" data-view="tokens" data-perm="enrollment_tokens:create">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 8.5 12 4l9 4.5v7L12 20l-9-4.5z"/>
+          <path d="M3 8.5 12 13l9-4.5M12 13v7"/>
+        </svg><span>安裝包</span>
+      </button>
+      <button class="nav-item" data-view="alerts" data-perm="alerts:read">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3a6 6 0 0 0-6 6c0 5-2 7-2 7h16s-2-2-2-7a6 6 0 0 0-6-6z"/>
+          <path d="M10 20a2 2 0 0 0 4 0"/>
+        </svg><span>告警</span>
+      </button>
+      <button class="nav-item" data-view="audit" data-perm="audit_logs:read">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
+          <path d="M14 3v5h5M9 13h6M9 17h4"/>
+        </svg><span>稽核紀錄</span>
+      </button>
+      <button class="nav-item" data-view="storage" data-perm="system:settings:manage">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <ellipse cx="12" cy="5.5" rx="8" ry="3"/>
+          <path d="M4 5.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6M4 11.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>
+        </svg><span>儲存</span>
+      </button>
+    </nav>
+
+    <div class="side-foot">
+      <div class="who">
+        <div class="avatar" id="who-initial" aria-hidden="true"></div>
+        <div class="who-text">
+          <span id="who-name"></span>
+          <span id="who-role" class="role-tag"></span>
+        </div>
+      </div>
+      <button id="change-my-password" class="ghost block">修改密碼</button>
+      <button id="logout" class="ghost block">登出</button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <p id="flash" class="alert" hidden></p>
+
+    <!-- 總覽 -->
+    <div class="view" id="view-dashboard">
+      <header class="page-head">
+        <h2>總覽</h2>
+        <p class="sub">端點連線狀態即時摘要。狀態由最後心跳時間推算。</p>
+      </header>
+      <div class="alert bad" id="uninstall-alert" hidden></div>
+      <div class="stats" id="stats"></div>
+
+      <section class="panel">
+        <div class="panel-head"><h3>最近活動</h3></div>
+        <div class="table-wrap"><table id="recent-table">
+          <thead><tr><th>裝置名稱</th><th>使用者</th><th>IP 位址</th>
+            <th>Agent 版本</th><th>最後上線</th><th>狀態</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <!-- 螢幕牆：一頁看所有畫面 -->
+    <div class="view" id="view-wall" hidden>
+      <header class="page-head">
+        <div class="page-head-row">
+          <div>
+            <h2>螢幕牆</h2>
+            <p class="sub">一頁即時檢視你權限範圍內所有端點的畫面。每格都是即時串流並記入稽核；點任一格可開全螢幕檢視。</p>
+          </div>
+          <button id="wall-refresh" class="ghost">重新整理</button>
+        </div>
+      </header>
+      <p id="wall-note" class="alert" hidden></p>
+      <p id="wall-empty" class="empty" hidden>沒有可檢視的端點。</p>
+      <div id="wall-grid" class="wall-grid"></div>
+    </div>
+
+    <!-- 端點 -->
+    <div class="view" id="view-endpoints" hidden>
+      <header class="page-head">
+        <h2>端點</h2>
+        <p class="sub">只會列出你權限範圍內的端點。</p>
+      </header>
+      <section class="panel">
+        <div class="panel-head">
+          <div class="toolbar">
+            <input id="ep-search" placeholder="搜尋裝置名稱">
+            <select id="ep-status">
+              <option value="">所有狀態</option>
+              <option value="ONLINE">線上</option>
+              <option value="WARNING">警告</option>
+              <option value="OFFLINE">離線</option>
+              <option value="DISABLED">已停用</option>
+            </select>
+            <select id="ep-group">
+              <option value="">所有群組</option>
+            </select>
+            <button id="ep-refresh" class="ghost">重新整理</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table id="ep-table">
+          <thead><tr><th>裝置名稱</th><th>組織</th><th>群組</th><th>使用者</th><th>IP 位址</th>
+            <th>作業系統</th><th>最後上線</th><th>狀態</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <!-- 管理員 -->
+    <div class="view" id="view-users" hidden>
+      <header class="page-head">
+        <h2>管理員</h2>
+        <p class="sub">刪除為軟刪除，稽核紀錄仍可追溯該帳號的歷史操作。
+        最高管理員只有安裝時建立的那一位，無法再新增或指派。</p>
+      </header>
+
+      <section class="panel">
+        <div class="table-wrap"><table id="user-table">
+          <thead><tr><th>帳號</th><th>角色</th><th>狀態</th>
+            <th>最後登入</th><th>建立時間</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+
+      <details class="panel form-panel" id="create-user-card">
+        <summary>建立管理員帳號</summary>
+        <form id="create-user-form" class="form-grid">
+          <div>
+            <label for="nu-username">帳號</label>
+            <input id="nu-username" required autocapitalize="off" spellcheck="false"
+                   placeholder="英數字、句點、底線、連字號">
+          </div>
+          <div>
+            <label for="nu-password">密碼</label>
+            <input id="nu-password" type="password" required autocomplete="new-password"
+                   placeholder="至少 12 字元，含大小寫／數字／符號任三類">
+          </div>
+          <div>
+            <label>角色</label>
+            <!-- 只能建立一般管理員：最高管理員只有安裝時建立的那一位，
+                 伺服器端也會拒絕指派 SUPER_ADMIN 角色。 -->
+            <p class="static-field">一般管理員</p>
+          </div>
+          <button type="submit" class="primary">建立</button>
+        </form>
+      </details>
+    </div>
+
+    <!-- 群組 -->
+    <div class="view" id="view-groups" hidden>
+      <header class="page-head">
+        <h2>群組</h2>
+        <p class="sub">把端點分群，再指派給一般管理員 —— 管理員只看得到被指派群組（加個別例外）內的端點。僅最高管理員可管理。</p>
+      </header>
+
+      <details class="panel form-panel">
+        <summary>建立群組</summary>
+        <form id="create-group-form" class="form-grid">
+          <div>
+            <label for="ng-name">群組名稱</label>
+            <input id="ng-name" required placeholder="例如：財務部">
+          </div>
+          <div>
+            <label for="ng-desc">描述（選填）</label>
+            <input id="ng-desc" placeholder="用途說明">
+          </div>
+          <button type="submit" class="primary">建立</button>
+        </form>
+      </details>
+
+      <section class="panel">
+        <div class="table-wrap"><table id="group-table">
+          <thead><tr><th>群組名稱</th><th>描述</th><th>端點數</th><th>建立時間</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <!-- 錄影 -->
+    <div class="view" id="view-recordings" hidden>
+      <header class="page-head">
+        <h2>螢幕錄影</h2>
+        <p class="sub">對端點或群組設定持續錄影。影格編碼為 H.264、加密後儲存，逾保留期限自動刪除。錄影一律寫稽核。僅最高管理員可設定。</p>
+      </header>
+
+      <p id="rec-warning" class="alert bad" hidden></p>
+
+      <details class="panel form-panel" id="rec-form-panel">
+        <summary>新增錄影政策</summary>
+        <form id="create-recording-form">
+          <div class="form-grid">
+            <div>
+              <label for="rp-target-type">對象類型</label>
+              <select id="rp-target-type">
+                <option value="ENDPOINT">單一端點</option>
+                <option value="GROUP">群組</option>
+              </select>
+            </div>
+            <div>
+              <label for="rp-target">對象</label>
+              <select id="rp-target"></select>
+            </div>
+            <div>
+              <label for="rp-mode">錄影模式</label>
+              <select id="rp-mode">
+                <option value="DIFFERENTIAL">差異式</option>
+                <option value="FULL">完全</option>
+              </select>
+            </div>
+            <div>
+              <label for="rp-fps">每秒影格</label>
+              <input id="rp-fps" type="number" value="5" min="1" max="15">
+            </div>
+            <div>
+              <label for="rp-retention">保留天數</label>
+              <input id="rp-retention" type="number" value="30" min="1" max="3650">
+            </div>
+            <div>
+              <label for="rp-storage">儲存位置</label>
+              <select id="rp-storage"><option value="">本機磁碟</option></select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="primary">建立並開始錄影</button>
+          </div>
+        </form>
+      </details>
+
+      <section class="panel">
+        <div class="table-wrap"><table id="recording-table">
+          <thead><tr><th>對象</th><th>類型</th><th>模式</th><th>fps</th>
+            <th>保留</th><th>儲存</th><th>狀態</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <!-- 安裝包 -->
+    <div class="view" id="view-tokens" hidden>
+      <header class="page-head">
+        <h2>安裝包</h2>
+        <p class="sub">產生內含設定的 Windows Agent 安裝檔（.msi），直接下載後派送到電腦上。</p>
+      </header>
+
+      <p id="toolchain-warning" class="alert bad" hidden></p>
+      <p id="pk-cert-note" class="alert" hidden></p>
+      <p id="agent-build-note" class="alert" hidden></p>
+      <p><button id="agent-rebuild" class="ghost" hidden>重建 Agent 程式</button></p>
+
+      <details class="panel form-panel" id="package-panel" open>
+        <summary>產生安裝包（MSI）</summary>
+        <form id="create-package-form">
+          <div class="form-grid">
+            <div>
+              <label for="pk-label">標籤</label>
+              <input id="pk-label" required placeholder="例如：財務部筆電-Q3">
+            </div>
+            <div>
+              <label for="pk-org">組織代號（選填）</label>
+              <input id="pk-org" placeholder="ACME">
+            </div>
+            <div>
+              <label for="pk-server">管理伺服器網址</label>
+              <input id="pk-server" required placeholder="https://management.example.com">
+            </div>
+          </div>
+
+          <fieldset class="field-group">
+            <legend>有效期間</legend>
+            <p class="hint">逾期後此安裝包無法再用於註冊，已註冊的電腦不受影響。</p>
+            <div class="period">
+              <div><label for="pk-years">年</label>
+                <input id="pk-years" type="number" value="1" min="0" max="10"></div>
+              <div><label for="pk-months">月</label>
+                <input id="pk-months" type="number" value="0" min="0" max="120"></div>
+              <div><label for="pk-days">日</label>
+                <input id="pk-days" type="number" value="0" min="0" max="3650"></div>
+              <p class="period-preview" id="pk-preview"></p>
+            </div>
+            <label class="check">
+              <input type="checkbox" id="pk-never">
+              <span>永不過期（只能以手動撤銷停用）</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="field-group">
+            <legend>可使用次數</legend>
+            <p class="hint">一台電腦註冊算一次。次數用完或期間屆滿，先到者先失效。</p>
+            <div class="period">
+              <div><label for="pk-uses">次數</label>
+                <input id="pk-uses" type="number" value="1" min="1" max="10000"></div>
+            </div>
+            <label class="check">
+              <input type="checkbox" id="pk-unlimited">
+              <span>不限次數</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="field-group">
+            <legend>管理密碼（選填）</legend>
+            <p class="hint">
+              設定後，在該電腦上變更 Agent 設定、清除註冊資料、以及<strong>解除安裝</strong>都需要此密碼。
+              密碼以 PBKDF2 雜湊寫入安裝包，明文不會儲存。
+              企業 IT 仍可用此密碼（msiexec /x ... UNINSTALLPWD=）或透過 GPO/MDM 正常移除；一般使用者無此密碼則無法自行移除。
+            </p>
+            <div class="period">
+              <div><label for="pk-password">密碼</label>
+                <input id="pk-password" type="password" autocomplete="new-password"
+                       placeholder="至少 8 個字元，留空則不設定"></div>
+            </div>
+          </fieldset>
+
+          <div class="form-actions">
+            <button type="submit" class="primary" id="pk-submit">產生並下載 MSI</button>
+            <span class="hint" id="pk-status"></span>
+          </div>
+        </form>
+      </details>
+
+      <section class="panel">
+        <div class="panel-head"><h3>已產生的安裝包</h3></div>
+        <div class="table-wrap"><table id="package-table">
+          <thead><tr><th>標籤</th><th>組織</th><th>大小</th><th>密碼</th><th>簽章</th>
+            <th>下載次數</th><th>建立時間</th><th>狀態</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <!-- 稽核 -->
+    <div class="view" id="view-audit" hidden>
+      <header class="page-head">
+        <h2>稽核紀錄</h2>
+        <p class="sub">唯讀。紀錄由操作本身寫入，無新增或刪除介面。</p>
+      </header>
+      <section class="panel">
+        <div class="panel-head">
+          <div class="toolbar">
+            <input id="au-action" placeholder="動作，例如 LOGIN">
+            <select id="au-result">
+              <option value="">所有結果</option>
+              <option value="SUCCESS">成功</option>
+              <option value="FAILURE">失敗</option>
+              <option value="DENIED">拒絕</option>
+            </select>
+            <button id="au-refresh" class="ghost">查詢</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table id="audit-table">
+          <thead><tr><th>時間</th><th>操作者</th><th>動作</th><th>對象</th>
+            <th>來源 IP</th><th>結果</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div class="pager">
+          <button id="au-prev" class="ghost">上一頁</button>
+          <span id="au-page"></span>
+          <button id="au-next" class="ghost">下一頁</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- 告警中心 -->
+    <div class="view" id="view-alerts" hidden>
+      <header class="page-head">
+        <h2>告警中心</h2>
+        <p class="sub">端點離線、磁碟不足、憑證即將到期、移除嘗試等事件會在此彙整，並可透過通道推送給 IT。</p>
+      </header>
+      <section class="panel">
+        <div class="panel-head">
+          <div class="toolbar">
+            <select id="al-status">
+              <option value="OPEN">未處理</option>
+              <option value="">全部</option>
+              <option value="RESOLVED">已解除</option>
+            </select>
+            <button id="al-refresh" class="ghost">重新整理</button>
+          </div>
+        </div>
+        <div class="table-wrap"><table id="alerts-table">
+          <thead><tr><th>時間</th><th>嚴重性</th><th>類型</th><th>標題</th>
+            <th>狀態</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+
+      <section class="panel" id="al-channels-panel" hidden>
+        <div class="panel-head">
+          <div>
+            <strong>通知通道</strong>
+            <p class="sub">告警達到通道的最低嚴重性時，會以 Email 或 Webhook（Slack／Teams／LINE 相容）推送。</p>
+          </div>
+        </div>
+        <form id="al-channel-form" class="toolbar" style="flex-wrap:wrap;gap:.5rem;padding:0 1.1rem 1rem">
+          <input id="ch-name" placeholder="名稱" required>
+          <select id="ch-type">
+            <option value="webhook">Webhook</option>
+            <option value="email">Email</option>
+          </select>
+          <input id="ch-target" placeholder="https://… 或 someone@example.com" required
+                 style="min-width:18rem;flex:1">
+          <select id="ch-sev">
+            <option value="warning">warning 以上</option>
+            <option value="info">info 以上（全部）</option>
+            <option value="critical">只有 critical</option>
+          </select>
+          <button type="submit">新增通道</button>
+        </form>
+        <div class="table-wrap"><table id="channels-table">
+          <thead><tr><th>名稱</th><th>類型</th><th>目標</th><th>最低嚴重性</th>
+            <th>啟用</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+    </div>
+
+    <!-- 儲存位置（錄影/截圖）-->
+    <div class="view" id="view-storage" hidden>
+      <header class="page-head">
+        <h2>儲存位置</h2>
+        <p class="sub">建立多個儲存目標（NAS，透過 FTP／SMB）。錄影政策可各自選要存到哪一個；截圖存到標記「預設」的目標。未指定時一律存本機。檔案先加密才送出，NAS 上只有密文。僅最高管理員可設定。</p>
+      </header>
+
+      <section class="panel">
+        <div class="table-wrap"><table id="storage-table">
+          <thead><tr><th>名稱</th><th>型別</th><th>位置</th><th>預設</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+
+      <details class="panel form-panel" id="st-form-panel">
+        <summary id="st-form-title">新增儲存目標</summary>
+        <form id="storage-form">
+          <input type="hidden" id="st-id">
+          <div class="form-grid">
+            <div>
+              <label for="st-name">名稱</label>
+              <input id="st-name" placeholder="例如 主 NAS、備份 FTP">
+            </div>
+            <div>
+              <label for="st-backend">型別</label>
+              <select id="st-backend">
+                <option value="SMB">SMB（NAS／Windows 共享）</option>
+                <option value="FTP">FTP／FTPS</option>
+              </select>
+            </div>
+            <div>
+              <label for="st-host">主機位址</label>
+              <input id="st-host" placeholder="例如 192.168.1.10 或 nas.local">
+            </div>
+            <div>
+              <label for="st-port">連接埠<span class="muted">（留空用預設）</span></label>
+              <input id="st-port" type="number" min="1" max="65535" placeholder="FTP 21 / SMB 445">
+            </div>
+            <div class="st-smb">
+              <label for="st-share">共享名稱（Share）</label>
+              <input id="st-share" placeholder="例如 recordings">
+            </div>
+            <div>
+              <label for="st-base">子目錄<span class="muted">（選填）</span></label>
+              <input id="st-base" placeholder="例如 eem/screen">
+            </div>
+            <div>
+              <label for="st-user">帳號</label>
+              <input id="st-user" autocomplete="off" placeholder="NAS 帳號">
+            </div>
+            <div class="st-smb">
+              <label for="st-domain">網域<span class="muted">（選填）</span></label>
+              <input id="st-domain" autocomplete="off" placeholder="WORKGROUP">
+            </div>
+            <div>
+              <label for="st-pass">密碼</label>
+              <input id="st-pass" type="password" autocomplete="new-password"
+                     placeholder="留空 = 不變更">
+            </div>
+            <div class="st-ftp">
+              <label for="st-tls">加密傳輸</label>
+              <select id="st-tls">
+                <option value="1">FTPS（建議）</option>
+                <option value="0">純 FTP（不加密）</option>
+              </select>
+            </div>
+            <div>
+              <label for="st-default">設為預設</label>
+              <select id="st-default">
+                <option value="0">否</option>
+                <option value="1">是（截圖存這裡）</option>
+              </select>
+            </div>
+          </div>
+          <p id="st-result" class="st-result" hidden></p>
+          <div class="form-actions">
+            <button type="button" id="st-test" class="ghost">測試連線</button>
+            <button type="button" id="st-cancel" class="ghost" hidden>取消編輯</button>
+            <button type="submit" id="st-save" class="primary">新增</button>
+          </div>
+        </form>
+      </details>
+    </div>
+  </main>
+</section>
+
+<!-- 端點畫面即時檢視 -->
+<div id="screen-modal" class="modal" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="sv-title">
+    <header class="modal-head">
+      <div>
+        <strong id="sv-title"></strong>
+        <span id="sv-sub" class="muted"></span>
+      </div>
+      <div class="sv-monitors" id="sv-monitors"></div>
+      <button id="sv-close" class="ghost" aria-label="關閉">✕</button>
+    </header>
+    <div class="sv-stage">
+      <p id="sv-status" class="sv-status"></p>
+      <img id="sv-image" alt="端點畫面" hidden>
+    </div>
+    <footer class="modal-foot spread">
+      <span class="muted">此檢視已記入稽核紀錄。關閉視窗即停止擷取。</span>
+      <span class="sv-foot-actions">
+        <button id="sv-gallery" class="ghost" title="查看此端點已存的截圖">查看截圖</button>
+        <button id="sv-shot" class="primary" disabled title="擷取目前畫面並儲存">截圖</button>
+      </span>
+    </footer>
+  </div>
+</div>
+
+<!-- 截圖紀錄（相簿）-->
+<div id="gallery-modal" class="modal" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="gl-title">
+    <header class="modal-head">
+      <div>
+        <strong id="gl-title"></strong>
+        <span id="gl-sub" class="muted"></span>
+      </div>
+      <button id="gl-close" class="ghost" aria-label="關閉">✕</button>
+    </header>
+    <div class="gl-body">
+      <p id="gl-status" class="muted"></p>
+      <div id="gl-grid" class="gl-grid"></div>
+    </div>
+    <div id="gl-light" class="gl-light" hidden>
+      <img id="gl-light-img" alt="截圖放大">
+      <div class="gl-light-bar">
+        <a id="gl-light-dl" class="ghost" download>下載</a>
+        <button id="gl-light-close" class="ghost">關閉</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 錄影回放 -->
+<div id="playback-modal" class="modal" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true">
+    <header class="modal-head">
+      <div>
+        <strong id="pb-title"></strong>
+        <span id="pb-time" class="muted"></span>
+      </div>
+      <input id="pb-date" type="date" class="pb-date">
+      <!-- step=1 讓瀏覽器給出「秒」的欄位，不是只有時:分 -->
+      <input id="pb-seek-time" type="time" step="1" class="pb-date" aria-label="跳到時間">
+      <button id="pb-seek" class="ghost">跳到</button>
+      <button id="pb-load" class="ghost">載入</button>
+      <button id="pb-close" class="ghost" aria-label="關閉">✕</button>
+    </header>
+    <div class="sv-stage">
+      <p id="pb-status" class="sv-status"></p>
+      <video id="pb-video" controls playsinline></video>
+    </div>
+    <div class="pb-controls">
+      <button id="pb-prev-seg" class="ghost" title="上一段（[）">◀ 上一段</button>
+      <button id="pb-next-seg" class="ghost" title="下一段（]）">下一段 ▶</button>
+      <label class="muted" style="display:flex;align-items:center;gap:.3rem">速度
+        <select id="pb-speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
+      <button id="pb-bookmark" class="ghost" title="在目前時刻加書籤（B）">＋ 書籤</button>
+      <span id="pb-bookmarks" class="pb-bookmarks"></span>
+    </div>
+    <div class="pb-timeline-wrap">
+      <div class="pb-labels"><span id="pb-start-label"></span><span id="pb-end-label"></span></div>
+      <div class="pb-timeline" id="pb-timeline">
+        <div class="pb-playhead" id="pb-playhead" hidden></div>
+      </div>
+      <div class="pb-hint" id="pb-hint" hidden></div>
+    </div>
+    <footer class="modal-foot"><span class="muted">回放已記入稽核紀錄。時間軸上拖曳可拉到任一時刻、滑過可預覽時間；色塊間空白代表當時沒有錄影。快捷鍵：空白＝播放／暫停、← →＝±5 秒、[ ]＝上／下一段、B＝書籤。</span></footer>
+  </div>
+</div>
+
+<!-- 群組成員編輯 -->
+<div id="members-modal" class="modal" hidden>
+  <div class="modal-box narrow" role="dialog" aria-modal="true">
+    <header class="modal-head">
+      <div><strong id="gm-title"></strong><span class="muted">勾選要納入此群組的端點</span></div>
+      <button id="gm-close" class="ghost" aria-label="關閉">✕</button>
+    </header>
+    <div class="picker" id="gm-list"></div>
+    <footer class="modal-foot spread">
+      <span class="muted" id="gm-count"></span>
+      <button id="gm-save" class="primary">儲存</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 管理員可見範圍 -->
+<div id="scope-modal" class="modal" hidden>
+  <div class="modal-box narrow" role="dialog" aria-modal="true">
+    <header class="modal-head">
+      <div><strong id="sc-title"></strong><span class="muted" id="sc-count"></span></div>
+      <button id="sc-close" class="ghost" aria-label="關閉">✕</button>
+    </header>
+    <div class="scope-body">
+      <h3 class="section-head">群組</h3>
+      <p class="sub">勾選的群組，其所有端點都可見。</p>
+      <div class="picker" id="sc-groups"></div>
+
+      <h3 class="section-head">個別例外</h3>
+      <p class="sub">在群組之外，強制加入或排除個別端點。排除優先於加入與群組。</p>
+      <div class="table-wrap"><table id="sc-exceptions">
+        <thead><tr><th>端點</th><th>可見性</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+    <footer class="modal-foot spread">
+      <span class="muted" id="sc-effective"></span>
+      <button id="sc-save" class="primary">儲存</button>
+    </footer>
+  </div>
+</div>
+
+<!-- 管理員功能授權 -->
+<div id="features-modal" class="modal" hidden>
+  <div class="modal-box narrow" role="dialog" aria-modal="true">
+    <header class="modal-head">
+      <div><strong id="ft-title"></strong></div>
+      <button id="ft-close" class="ghost" aria-label="關閉">✕</button>
+    </header>
+    <div class="scope-body">
+      <p class="sub">勾選要讓這位一般管理員看到／使用的功能。未勾選的預設隱藏，且伺服器端也會拒絕。</p>
+      <div class="picker" id="ft-list"></div>
+      <p class="alert bad" id="ft-warn" hidden>
+        注意：群組管理／儲存位置／安裝包屬高權限授權 —— 被授權者可據此擴大自身可及範圍或註冊新端點，請審慎授予。
+      </p>
+    </div>
+    <footer class="modal-foot spread">
+      <span class="muted">變更即時生效（該管理員下次操作或重新整理後套用）。</span>
+      <button id="ft-save" class="primary">儲存</button>
+    </footer>
+  </div>
+</div>
+
+<div id="password-modal" class="modal" hidden>
+  <div class="modal-box narrow" role="dialog" aria-modal="true" aria-labelledby="pw-title">
+    <header class="modal-head">
+      <div><strong id="pw-title"></strong></div>
+      <button id="pw-close" class="ghost" aria-label="關閉">✕</button>
+    </header>
+    <div class="scope-body">
+      <p class="sub" id="pw-hint"></p>
+      <form id="password-form" class="form-grid">
+        <!-- 給密碼管理器的提示：這是哪一個帳號的密碼。 -->
+        <input id="pw-username" type="text" autocomplete="username" hidden>
+        <div id="pw-current-wrap">
+          <label for="pw-current">目前密碼</label>
+          <input id="pw-current" type="password" autocomplete="current-password">
+        </div>
+        <div>
+          <label for="pw-new">新密碼</label>
+          <input id="pw-new" type="password" required autocomplete="new-password"
+                 placeholder="至少 12 字元，含大小寫／數字／符號任三類">
+        </div>
+        <div>
+          <label for="pw-confirm">再輸入一次新密碼</label>
+          <input id="pw-confirm" type="password" required autocomplete="new-password">
+        </div>
+      </form>
+      <p class="alert bad" id="pw-error" hidden></p>
+    </div>
+    <footer class="modal-foot spread">
+      <span class="muted" id="pw-foot"></span>
+      <button id="pw-save" class="primary">變更密碼</button>
+    </footer>
+  </div>
+</div>
+
+<script src="/static/console.js"></script>
+</body>
+</html>

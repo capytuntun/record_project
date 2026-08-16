@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Endpoint Management Agent installer.
+
+  The package generator rebuilds this per download, passing the configuration
+  in as WiX preprocessor variables, so each package carries its own server URL,
+  enrollment token and administrator password hash.
+
+  Two things this installer deliberately does NOT do (CLAUDE.md section 19):
+
+    * It does not block uninstall. It appears in Apps & Features and removes
+      cleanly with msiexec /x. Restricting removal is the job of GPO/MDM
+      application policy, not of an agent resisting its own operator.
+    * It does not hide. ARP entries, the service name, and the install
+      directory all use the product's real name.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall">
+
+  <?ifndef CustomActionDll ?><?define CustomActionDll = "..\src\EndpointAgent.CustomActions\bin\Release\net472\EndpointAgent.CustomActions.CA.dll" ?><?endif?>
+  <?ifndef ServerUrl ?><?define ServerUrl = "https://localhost" ?><?endif?>
+  <?ifndef EnrollToken ?><?define EnrollToken = "" ?><?endif?>
+  <?ifndef OrgId ?><?define OrgId = "" ?><?endif?>
+  <?ifndef AdminPasswordHash ?><?define AdminPasswordHash = "" ?><?endif?>
+  <?ifndef PackageLabel ?><?define PackageLabel = "Endpoint Agent" ?><?endif?>
+  <?ifndef AgentVersion ?><?define AgentVersion = "0.1.0" ?><?endif?>
+
+  <!-- Codepage 65001: the service description and error messages shown to the
+       user are Traditional Chinese, which the MSI default (1252) cannot encode.
+       Language 1028 = zh-TW. -->
+  <Package Name="Endpoint Management Agent"
+           Manufacturer="Enterprise IT"
+           Version="$(AgentVersion)"
+           UpgradeCode="6f3a9c24-7b18-4e5d-9a02-1f8b6d4c3e70"
+           Scope="perMachine"
+           Compressed="yes"
+           Language="1028"
+           Codepage="65001">
+
+    <!-- The summary stream only accepts an ANSI codepage, so it stays ASCII;
+         the Chinese strings live in the database, which is UTF-8 above. -->
+    <SummaryInformation Description="Endpoint Management Agent - $(PackageLabel)" />
+
+    <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
+      DowngradeErrorMessage="已安裝較新版本的端點管理 Agent。" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Visible in Apps & Features, with a working support link. -->
+    <Property Id="ARPPRODUCTICON" Value="AgentIcon" />
+    <Property Id="ARPNOREPAIR" Value="0" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <Launch Condition="Installed OR VersionNT64"
+            Message="此 Agent 僅支援 64 位元 Windows。" />
+
+    <Feature Id="Main" Title="Endpoint Management Agent" Level="1">
+      <ComponentGroupRef Id="AgentComponents" />
+    </Feature>
+
+    <!-- Password-gated uninstall (CLAUDE.md sections 12, 19).
+         Passed on the command line: msiexec /x {code} UNINSTALLPWD=<password>.
+         Secure="yes" lets it survive into the (elevated) execute sequence and
+         keeps it out of the verbose log. -->
+    <Property Id="UNINSTALLPWD" Secure="yes" />
+
+    <Binary Id="EemCustomActions" SourceFile="$(CustomActionDll)" />
+
+    <!-- Immediate so it can read the config, show a message, and abort before
+         anything is removed. Return="check" makes a Failure stop the uninstall.
+         The action itself fails OPEN on any internal error (see UninstallGuard),
+         so a bug here can only fail to enforce the password, never block a
+         legitimate removal. -->
+    <CustomAction Id="CheckUninstallPassword"
+                  BinaryRef="EemCustomActions"
+                  DllEntry="CheckUninstallPassword"
+                  Execute="immediate"
+                  Return="check" />
+
+<?ifdef ServerCaCert ?>
+    <!-- Trust the management server's certificate on this endpoint.
+
+         The agent does no custom TLS validation on purpose (CLAUDE.md 30: never
+         bypass certificate checks), so with the default self-signed certificate
+         an endpoint cannot talk to the server until it trusts it. A GPO push is
+         the enterprise answer; where there is no domain, the installer is the
+         only thing that reaches every endpoint, so the certificate travels in
+         the MSI and is added here.
+
+         What is added is the server's LEAF certificate, which carries
+         BasicConstraints CA:FALSE. As a trust anchor it therefore vouches for
+         exactly one certificate (this server's own) and cannot mint trust for
+         any other name. This is not the same as installing a CA.
+
+         Return="ignore" throughout: a certificate that fails to install must
+         never fail the installation, and must never block a removal. -->
+    <CustomAction Id="TrustServerCertificate"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[System64Folder]certutil.exe&quot; -addstore -f Root &quot;[INSTALLFOLDER]server-ca.cer&quot;"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- Removal is by thumbprint, not by file, so it does not care whether the
+         .cer has already been deleted by the time this runs. -->
+    <CustomAction Id="UntrustServerCertificate"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[System64Folder]certutil.exe&quot; -delstore Root $(ServerCaThumbprint)"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+<?endif?>
+
+    <InstallExecuteSequence>
+      <!-- On uninstall only, and not during a major-upgrade's implicit removal
+           (upgrades must not require the password). -->
+      <Custom Action="CheckUninstallPassword" Before="InstallValidate"
+              Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+<?ifdef ServerCaCert ?>
+      <!-- After InstallFiles: the .cer must be on disk before certutil reads it. -->
+      <Custom Action="TrustServerCertificate" After="InstallFiles"
+              Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <!-- Leave the trust in place across a major upgrade; the incoming package
+           re-adds the same certificate anyway. -->
+      <Custom Action="UntrustServerCertificate" After="InstallInitialize"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+<?endif?>
+    </InstallExecuteSequence>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Endpoint Management Agent" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATAFOLDER" Name="EndpointAgent" />
+    </StandardDirectory>
+
+<?ifdef ServerCaCert ?>
+    <!-- Referenced by the certutil custom actions; naming it here puts it in
+         the Directory table so [System64Folder] resolves. -->
+    <StandardDirectory Id="System64Folder" />
+<?endif?>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="AgentComponents">
+
+      <Component Id="AgentExecutable" Directory="INSTALLFOLDER" Guid="*">
+        <File Id="EndpointAgentExe"
+              Source="$(AgentBinary)"
+              Name="EndpointAgent.exe"
+              KeyPath="yes" />
+
+        <!-- Runs as LocalSystem: the agent must report before any user signs
+             in, and its credential store is machine-scoped. -->
+        <ServiceInstall Id="AgentService"
+                        Name="EndpointAgent"
+                        DisplayName="Endpoint Management Agent"
+                        Description="回報此電腦的端點狀態至企業管理伺服器。由貴公司 IT 部門管理。"
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Vital="yes">
+          <!-- Recover from crashes, but never in a way that fights an
+               administrator stopping the service on purpose. -->
+          <util:ServiceConfig
+            FirstFailureActionType="restart"
+            SecondFailureActionType="restart"
+            ThirdFailureActionType="none"
+            RestartServiceDelayInSeconds="60" />
+        </ServiceInstall>
+
+        <ServiceControl Id="AgentServiceControl"
+                        Name="EndpointAgent"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <!-- Configuration lives in ProgramData, writable only by administrators
+           via the folder's inherited ACL. It holds no secret: the enrollment
+           token is single-use and cleared once spent, and the password is
+           stored as a PBKDF2 hash. -->
+      <Component Id="AgentConfiguration" Directory="DATAFOLDER" Guid="*">
+        <File Id="AgentConfigFile"
+              Source="$(ConfigFile)"
+              Name="agent.config.json"
+              KeyPath="yes" />
+        <!-- Leave enrollment state behind on uninstall? No: a reinstall should
+             start clean rather than resurrect a stale identity. -->
+        <util:RemoveFolderEx On="uninstall" Property="DATAFOLDER" />
+      </Component>
+
+      <!-- Registering the event log source at install time means the service
+           can write diagnostics without needing rights to create it later. -->
+      <Component Id="EventLogSource" Directory="INSTALLFOLDER" Guid="*">
+        <RegistryKey Root="HKLM"
+                     Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\EndpointAgent">
+          <RegistryValue Type="string" Name="EventMessageFile"
+                         Value="%SystemRoot%\System32\EventCreate.exe" KeyPath="yes" />
+          <RegistryValue Type="integer" Name="TypesSupported" Value="7" />
+        </RegistryKey>
+      </Component>
+
+      <!-- Autostart the user-session tray helper at logon, for every user.
+           HKLM Run runs it in each interactive session, which is where the
+           notification-area icon and screen capture must live (a session-0
+           service can do neither). Installed once; appears at next logon. -->
+      <Component Id="TrayAutostart" Directory="INSTALLFOLDER" Guid="*">
+        <RegistryValue
+          Root="HKLM"
+          Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+          Name="EndpointAgentTray"
+          Type="string"
+          Value="&quot;[INSTALLFOLDER]EndpointAgent.exe&quot; tray"
+          KeyPath="yes" />
+      </Component>
+
+<?ifdef ServerCaCert ?>
+      <!-- The management server's certificate, installed into the machine's
+           trusted roots by the custom actions above. Kept on disk as well so an
+           administrator can inspect exactly what was trusted. -->
+      <Component Id="ServerCaCertificate" Directory="INSTALLFOLDER" Guid="*">
+        <File Id="ServerCaCertFile"
+              Source="$(ServerCaCert)"
+              Name="server-ca.cer"
+              KeyPath="yes" />
+      </Component>
+<?endif?>
+
+      <!-- Recorded so support can tell which generated package a machine came
+           from without reading the agent's own config. -->
+      <Component Id="ProductMetadata" Directory="INSTALLFOLDER" Guid="*">
+        <RegistryKey Root="HKLM" Key="SOFTWARE\EnterpriseIT\EndpointAgent">
+          <RegistryValue Type="string" Name="PackageLabel"
+                         Value="$(PackageLabel)" KeyPath="yes" />
+          <RegistryValue Type="string" Name="ServerUrl" Value="$(ServerUrl)" />
+          <RegistryValue Type="string" Name="OrganizationId" Value="$(OrgId)" />
+          <RegistryValue Type="string" Name="Version" Value="$(AgentVersion)" />
+        </RegistryKey>
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <Icon Id="AgentIcon" SourceFile="$(AgentBinary)" />
+  </Fragment>
+
+</Wix>

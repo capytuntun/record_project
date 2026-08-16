@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>EndpointAgent</RootNamespace>
+    <AssemblyName>EndpointAgent</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The tray helper uses WinForms NotifyIcon for the notification-area icon. -->
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <!-- Self-contained so the MSI does not depend on a runtime being present
+         on the managed machine. Single-file because the package generator
+         rebuilds the MSI per download: one payload builds in seconds, where
+         200-odd loose framework files would not. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>none</DebugType>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Runtime footprint on the managed machine (performance work).
+         * Workstation, non-concurrent GC: a background agent wants a small,
+           steady heap, not the throughput-oriented server GC's larger one.
+         * ReadyToRun: precompiles the hot paths so the agent spends far less
+           CPU on JIT at process start. It enlarges the binary, which is why
+           EnableCompressionInSingleFile stays on above to offset it, so the two
+           together keep the MSI from ballooning.
+         * AllowUnsafeBlocks: the frame-change detector (FrameCapturer) walks the
+           locked bitmap bits directly, which is what makes skipping unchanged
+           frames cheaper than the JPEG encode it avoids. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Version>0.1.0</Version>
+    <Company>Enterprise IT</Company>
+    <Product>Endpoint Management Agent</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="9.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <!-- Screen capture. Windows-only, which this project already is. -->
+    <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

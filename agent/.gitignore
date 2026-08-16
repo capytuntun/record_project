@@ -1,0 +1,11 @@
+bin/
+obj/
+publish/
+packaging/*.msi
+packaging/*.wixpdb
+packaging/probe.config.json
+
+# Signing secrets — never commit private keys.
+signing/*.pfx
+signing/*.cer
+*.pfx

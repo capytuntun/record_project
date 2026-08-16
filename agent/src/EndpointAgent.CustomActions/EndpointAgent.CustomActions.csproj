@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    WiX DTF managed custom action. Targets .NET Framework 4.7.2 because that is
+    what the Windows Installer custom-action host (SfxCA) loads. The
+    WixToolset.Dtf.CustomAction package repackages the built DLL into
+    EndpointAgent.CustomActions.CA.dll, which the WiX package references.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>EndpointAgent.CustomActions</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Dtf.WindowsInstaller" Version="5.0.2" />
+    <PackageReference Include="WixToolset.Dtf.CustomAction" Version="5.0.2" />
+  </ItemGroup>
+
+  <!--
+    The uninstall password prompt (PasswordPrompt.cs). Both assemblies ship with
+    the .NET Framework the custom-action host already loads, so this adds no
+    file to the package and no new failure mode at uninstall time.
+  -->
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <!-- DPAPI (ProtectedData) to read the device credential, and HttpWebRequest,
+         so the uninstall action can notify the server at removal time. -->
+    <Reference Include="System.Security" />
+  </ItemGroup>
+
+</Project>

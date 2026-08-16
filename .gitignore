@@ -1,0 +1,50 @@
+# ============================================================
+# Secrets & local data — NEVER commit
+# ============================================================
+**/.env
+.env
+**/*.db
+**/*.sqlite3
+**/*.db.bak
+**/*.key
+**/*.pem
+**/*.pfx
+**/*.cer
+**/instance/
+**/recording.key
+**/device.cred
+
+# ============================================================
+# Build output / dependencies / large binaries
+# ============================================================
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/bin/
+**/obj/
+**/publish/
+**/node_modules/
+**/tools/ffmpeg/
+*.msi
+*.wixpdb
+
+# ============================================================
+# Owner asked to keep these out of the repo
+# ============================================================
+README.md
+CLAUDE.md
+
+# ============================================================
+# OS / editor cruft
+# ============================================================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Stray screenshots / debug images (e.g. shared console captures)
+*.png
+*.jpg
+*.jpeg
