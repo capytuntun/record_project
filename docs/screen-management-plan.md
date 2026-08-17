@@ -52,7 +52,9 @@ metadata index, plaintext deleted, frames never in DB); hub integration
 (recording = a persistent virtual viewer, so the agent captures continuously);
 `recording_control` starting/stopping recorders on agent connect/disconnect and
 policy change; `/api/recordings` policy CRUD + segment listing (scoped, audited);
-retention sweeper + `flask sweep-recordings`; console 錄影 view.
+retention sweeper + `flask sweep-recordings`; console 錄影 view; multi-select
+export (`POST /api/recordings/segments/export` → streamed ZIP of decrypted MP4s
++ manifest, audited as `EXPORT_RECORDING`; console 回放 → 下載 panel).
 Verified end-to-end: the real agent recorded to encrypted DIFFERENTIAL segments
 that decrypt to valid H.264. 9 unit tests + a DOM test that records via the UI.
 Compression measured ~13% of raw JPEG. Screen data is always encrypted at rest:

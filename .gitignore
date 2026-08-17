@@ -33,8 +33,11 @@
 # ============================================================
 # Owner asked to keep these out of the repo
 # ============================================================
-README.md
 CLAUDE.md
+# Sub-project READMEs (server/, agent/) stay local; the root README.md is
+# published (owner asked for it to be on GitHub).
+README.md
+!/README.md
 
 # ============================================================
 # OS / editor cruft

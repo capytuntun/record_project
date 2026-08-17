@@ -218,3 +218,154 @@ def test_retention_sweep_deletes_expired(client, app, super_admin_token, tmp_pat
     assert removed == 1
     assert not expired_file.exists()
     assert db.session.query(RecordingSegment).count() == 1
+
+
+# --- export (multi-select download) -----------------------------------------
+
+def _seed_segments(app, ep, tmp_path, count=2, *, passphrase="test-passphrase",
+                   write_files=True):
+    """Insert `count` segment rows for `ep` and (optionally) their encrypted files.
+
+    Returns [(segment_id, plaintext_bytes)] in chronological order.
+    """
+    from app.services.recording_crypto import derive_key, encrypt_bytes
+
+    app.config["RECORDING_DIR"] = str(tmp_path)
+    app.config["RECORDING_KEY_PASSPHRASE"] = passphrase
+    key = derive_key(passphrase)
+    now = utcnow().replace(microsecond=0)
+    out = []
+    for i in range(count):
+        plaintext = f"fake-mp4-{i}-".encode() * 100
+        rel = f"{ep}/x{i}.mp4.enc"
+        if write_files:
+            path = tmp_path / ep / f"x{i}.mp4.enc"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(encrypt_bytes(key, plaintext))
+        seg = RecordingSegment(
+            endpoint_id=ep, mode="DIFFERENTIAL", filename=rel,
+            started_at=now - timedelta(minutes=10 - i * 5),
+            ended_at=now - timedelta(minutes=5 - i * 5),
+            size_bytes=len(plaintext), frame_count=0,
+            expires_at=now + timedelta(days=30),
+        )
+        db.session.add(seg)
+        db.session.flush()
+        out.append((seg.id, plaintext))
+    db.session.commit()
+    return out
+
+
+def _unzip(data: bytes):
+    import io
+    import zipfile
+    return zipfile.ZipFile(io.BytesIO(data))
+
+
+def test_export_streams_zip_of_decrypted_mp4s(client, app, super_admin, super_admin_token,
+                                              tmp_path):
+    ep = _enroll(client, super_admin_token, "REC-EXPORT")
+    seeded = _seed_segments(app, ep, tmp_path, count=2)
+
+    resp = client.post("/api/recordings/segments/export",
+                       json={"segmentIds": [s[0] for s in reversed(seeded)],
+                             "tzOffsetMinutes": 480},
+                       headers=auth_header(super_admin_token))
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert resp.mimetype == "application/zip"
+    assert "attachment" in resp.headers["Content-Disposition"]
+    assert "recording_REC-EXPORT_" in resp.headers["Content-Disposition"]
+
+    archive = _unzip(resp.get_data())
+    assert archive.testzip() is None   # streamed (data-descriptor) archive is well-formed
+    names = archive.namelist()
+    mp4s = [n for n in names if n.endswith(".mp4")]
+    assert len(mp4s) == 2 and "manifest.json" in names
+    # Chronological, named after the device + local (UTC+8) time span.
+    assert all(n.startswith("REC-EXPORT_") for n in mp4s)
+    assert mp4s == sorted(mp4s)
+    # Contents are the plaintext MP4 bytes, not the ciphertext.
+    for name, (_, plaintext) in zip(mp4s, seeded):
+        assert archive.read(name) == plaintext
+
+    import json
+    manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["exportedBy"] == super_admin.username
+    assert manifest["endpointId"] == ep
+    assert manifest["timezoneOffsetMinutes"] == 480
+    assert [m["segmentId"] for m in manifest["segments"]] == [s[0] for s in seeded]
+    assert manifest["missing"] == []
+    assert all(m["integrity"] == "ok" for m in manifest["segments"])
+
+    # One audit entry per export, naming every segment and the overall span.
+    from app.models.audit import EXPORT_RECORDING
+    entry = (db.session.query(AuditLog)
+             .filter(AuditLog.action == EXPORT_RECORDING).one())
+    assert entry.target_id == ep
+    meta = entry.to_dict()["metadata"]
+    assert meta["segmentCount"] == 2
+    assert set(meta["segmentIds"]) == {s[0] for s in seeded}
+    assert meta["from"] and meta["to"] and meta["deviceName"] == "REC-EXPORT"
+
+
+def test_export_missing_file_is_listed_not_fatal(client, app, super_admin_token, tmp_path):
+    ep = _enroll(client, super_admin_token, "REC-EXPORT-MISS")
+    seeded = _seed_segments(app, ep, tmp_path, count=2)
+    # Simulate retention having removed the first file out from under the index.
+    (tmp_path / ep / "x0.mp4.enc").unlink()
+
+    resp = client.post("/api/recordings/segments/export",
+                       json={"segmentIds": [s[0] for s in seeded]},
+                       headers=auth_header(super_admin_token))
+    assert resp.status_code == 200
+    archive = _unzip(resp.get_data())
+    import json
+    manifest = json.loads(archive.read("manifest.json"))
+    assert len(manifest["segments"]) == 1
+    assert [m["segmentId"] for m in manifest["missing"]] == [seeded[0][0]]
+    assert manifest["missing"][0]["reason"] == "file_missing"
+    # No tz offset given -> UTC naming, still a valid archive.
+    assert manifest["timezoneOffsetMinutes"] == 0
+
+
+def test_export_validation_and_scope(client, app, super_admin_token, plain_admin_token,
+                                     tmp_path):
+    ep_a = _enroll(client, super_admin_token, "REC-EXP-A")
+    ep_b = _enroll(client, super_admin_token, "REC-EXP-B")
+    seeded_a = _seed_segments(app, ep_a, tmp_path, count=1)
+    seeded_b = _seed_segments(app, ep_b, tmp_path, count=1)
+    headers = auth_header(super_admin_token)
+    url = "/api/recordings/segments/export"
+
+    # Empty / malformed selections.
+    assert client.post(url, json={"segmentIds": []}, headers=headers).status_code == 400
+    assert client.post(url, json={"segmentIds": "abc"}, headers=headers).status_code == 400
+    assert client.post(url, json={"segmentIds": [1, 2]}, headers=headers).status_code == 400
+    assert client.post(url, json={"segmentIds": [seeded_a[0][0]], "tzOffsetMinutes": "8"},
+                       headers=headers).status_code == 400
+    # Over the per-request cap.
+    from app.services.recording_export import MAX_SEGMENTS_PER_EXPORT
+    too_many = [f"id-{i}" for i in range(MAX_SEGMENTS_PER_EXPORT + 1)]
+    assert client.post(url, json={"segmentIds": too_many}, headers=headers).status_code == 400
+    # Unknown id -> 404 (same as a single missing segment).
+    assert client.post(url, json={"segmentIds": ["does-not-exist"]},
+                       headers=headers).status_code == 404
+    # Mixing endpoints in one archive is refused.
+    assert client.post(url, json={"segmentIds": [seeded_a[0][0], seeded_b[0][0]]},
+                       headers=headers).status_code == 400
+    # A plain admin without scope over the endpoint sees not-found, not the file.
+    assert client.post(url, json={"segmentIds": [seeded_a[0][0]]},
+                       headers=auth_header(plain_admin_token)).status_code == 404
+    # Nothing was audited as exported for the refused calls.
+    from app.models.audit import EXPORT_RECORDING
+    assert db.session.query(AuditLog).filter(AuditLog.action == EXPORT_RECORDING).count() == 0
+
+
+def test_export_without_key_conflicts(client, app, super_admin_token, tmp_path):
+    ep = _enroll(client, super_admin_token, "REC-EXP-NOKEY")
+    seeded = _seed_segments(app, ep, tmp_path, count=1)
+    app.config["RECORDING_KEY_PASSPHRASE"] = None
+    resp = client.post("/api/recordings/segments/export",
+                       json={"segmentIds": [seeded[0][0]]},
+                       headers=auth_header(super_admin_token))
+    assert resp.status_code == 409

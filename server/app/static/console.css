@@ -450,6 +450,41 @@ input:focus, select:focus {
   border: none; background: none; color: inherit; cursor: pointer; padding: 0 .1rem; opacity: .7;
 }
 .pb-bookmarks .pill button:hover { opacity: 1; }
+/* 多選下載面板：清單自己捲動，讓影片、時間軸、頁尾都留在畫面內。 */
+.pb-export {
+  border-top: 1px solid var(--rule);
+  /* 面板本身也是 flex 欄，清單先縮、其他固定，這樣頁尾的下載按鈕永遠看得到。 */
+  display: flex; flex-direction: column; min-height: 0; flex: 0 1 auto;
+}
+.pb-export-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .55rem 1.1rem .3rem; flex: none;
+}
+.pb-export-actions { display: flex; gap: .35rem; flex: none; }
+/* 比通用 .picker（46vh）更高的特異性，否則會沿用它的高度而把頁尾擠出視窗。 */
+.picker.pb-export-list { max-height: 24vh; min-height: 0; flex: 0 1 auto; padding: 0 0 .2rem; }
+.pb-export-list .picker-row { padding: .3rem 1.1rem; }
+.pb-export-list .picker-row.selected { background: var(--accent-wash); }
+.pb-export-list .picker-row.playing .picker-title::before {
+  content: "▶ "; color: var(--accent); font-size: .7rem;
+}
+.pb-export-list .picker-title { font-variant-numeric: tabular-nums; }
+.pb-export-list .picker-sub { white-space: nowrap; }
+.pb-export-list .pb-export-play { margin-left: auto; flex: none; }
+.pb-export-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .45rem 1.1rem .6rem; flex: none;
+}
+.pb-export-foot .primary { padding: .4rem .9rem; font-size: .8125rem; flex: none; }
+.pb-export-foot .muted { font-size: .75rem; }
+.pb-export-foot .muted.bad { color: var(--critical); }
+/* 面板打開時把影片區讓小一點，小螢幕上才不會把頁尾擠出 90vh 之外。 */
+.modal-box.pb-export-open .sv-stage { min-height: 180px; }
+.modal-box.pb-export-open .sv-stage video { max-height: 42vh; }
+/* 時間軸上同步標出已勾選的片段。 */
+.pb-block.selected { background: var(--warning, #e0a800); opacity: .9; }
+#pb-export-toggle.active { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
+
 .sv-status {
   position: absolute;
   color: #c3c2b7; font-size: .875rem;

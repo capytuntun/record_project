@@ -14,6 +14,7 @@ from ..models import Endpoint, EndpointGroup, RecordingPolicy, RecordingSegment,
 from ..models.audit import (
     CHANGE_RECORDING_POLICY,
     DELETE_RECORDING_POLICY,
+    EXPORT_RECORDING,
 )
 from ..models.recording import (
     MODE_DIFFERENTIAL,
@@ -248,6 +249,142 @@ def segment_video(segment_id: str):
         plaintext,
         mimetype="video/mp4",
         headers={"Content-Disposition": "inline", "Cache-Control": "no-store"},
+    )
+
+
+@bp.post("/segments/export")
+@require_permission(ENDPOINTS_SCREEN_VIEW)
+def export_segments():
+    """Download a selection of one endpoint's segments as a ZIP of plain MP4s.
+
+    Body: ``{"segmentIds": [...], "tzOffsetMinutes": 480}``. Same permission
+    and scope as playback -- a viewer can already save every segment the
+    /video route hands them, so this adds convenience, not access -- but it is
+    audited as EXPORT_RECORDING (one entry per download, listing every segment
+    and the overall time span) because a copy outside the encrypted store is a
+    different event from a replay in the console (sections 14, 17, 23).
+
+    The archive is streamed: segments are decrypted one at a time as the
+    response is written, so a large selection never has to fit in memory.
+    """
+    import re
+    from urllib.parse import quote
+
+    from flask import Response, stream_with_context
+
+    from ..models.base import iso, utcnow
+    from ..services.recording_crypto import derive_key
+    from ..services.recording_export import (
+        MAX_SEGMENTS_PER_EXPORT,
+        ExportItem,
+        archive_name,
+        safe_name,
+        stream_export,
+        tz_from_offset,
+    )
+
+    actor = require_current_user()
+    body = json_body()
+
+    raw_ids = body.get("segmentIds")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ValidationError("請至少選擇一段錄影。")
+    if not all(isinstance(value, str) and value.strip() for value in raw_ids):
+        raise ValidationError("'segmentIds' 必須是片段 id 的清單。")
+    # De-duplicate while keeping the caller's order irrelevant: we sort by time.
+    segment_ids = list(dict.fromkeys(value.strip() for value in raw_ids))
+    if len(segment_ids) > MAX_SEGMENTS_PER_EXPORT:
+        raise ValidationError(
+            f"一次最多匯出 {MAX_SEGMENTS_PER_EXPORT} 段錄影，請分批下載。"
+        )
+    tz_offset = body.get("tzOffsetMinutes")
+    if tz_offset is not None and (isinstance(tz_offset, bool) or not isinstance(tz_offset, int)):
+        raise ValidationError("'tzOffsetMinutes' 必須是整數。")
+
+    segments = (
+        db.session.query(RecordingSegment)
+        .filter(RecordingSegment.id.in_(segment_ids))
+        .order_by(RecordingSegment.started_at.asc())
+        .all()
+    )
+    if len(segments) != len(segment_ids):
+        raise NotFoundError("找不到部分錄影片段（可能已逾保留期限刪除）。")
+
+    endpoint_ids = {segment.endpoint_id for segment in segments}
+    if len(endpoint_ids) != 1:
+        raise ValidationError("一次只能匯出同一個端點的錄影。")
+    endpoint = db.session.get(Endpoint, next(iter(endpoint_ids)))
+    if endpoint is None or endpoint.is_deleted or not can_access_endpoint(actor, endpoint):
+        # Out of scope reads as not-found, like the rest of the endpoint API.
+        raise NotFoundError("找不到錄影片段。")
+
+    passphrase = current_app.config.get("RECORDING_KEY_PASSPHRASE")
+    if not passphrase:
+        raise ConflictError("此伺服器未設定錄影金鑰，無法解密匯出。")
+
+    tz = tz_from_offset(tz_offset)
+    device = safe_name(endpoint.device_name, endpoint.id[:8])
+    items = [
+        ExportItem(
+            segment_id=segment.id,
+            filename=segment.filename,
+            storage_backend=segment.storage_backend,
+            started_at=segment.started_at,
+            ended_at=segment.ended_at,
+            sha256=segment.sha256,
+            size_bytes=segment.size_bytes,
+        )
+        for segment in segments
+    ]
+    span_from = segments[0].started_at
+    span_to = max((s.ended_at or s.started_at) for s in segments)
+    now = utcnow()
+
+    # Audit before the first byte goes out: an interrupted download still shows
+    # what was requested, and there is no status code left to attach it to later.
+    audit.record(
+        EXPORT_RECORDING,
+        target_type="endpoint",
+        target_id=endpoint.id,
+        metadata={
+            "segmentCount": len(items),
+            "segmentIds": [item.segment_id for item in items],
+            "from": iso(span_from),
+            "to": iso(span_to),
+            "totalBytes": sum(item.size_bytes or 0 for item in items),
+            "deviceName": endpoint.device_name,
+        },
+    )
+    db.session.commit()
+
+    app = current_app._get_current_object()
+    generator = stream_export(
+        app,
+        key=derive_key(passphrase),
+        device=device,
+        items=items,
+        tz=tz,
+        exported_by=actor.username,
+        exported_at=now,
+        endpoint_id=endpoint.id,
+    )
+    name = archive_name(device, items, tz)
+    ascii_name = re.sub(r"[^0-9A-Za-z._-]+", "_", name)
+    disposition = (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(name)}"
+    )
+    return Response(
+        stream_with_context(generator),
+        mimetype="application/zip",
+        headers={
+            "Content-Disposition": disposition,
+            "Cache-Control": "no-store",
+            "X-Segment-Count": str(len(items)),
+            # Let the bytes flow through nginx as they are produced instead of
+            # being spooled to a temp file first (Linux deployment, docs).
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

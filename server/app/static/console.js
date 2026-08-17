@@ -1074,7 +1074,11 @@ $("gallery-modal").addEventListener("click", (event) => {
  * blob 餵給 <video>(瀏覽器的 <video src> 無法帶標頭)。一段播完自動接下一段。
  * 每次抓片段都在伺服器寫稽核(誰、哪台、哪段時間)。 */
 
-const playback = { endpoint: null, segments: [], index: -1, objectUrl: null, span: null };
+const playback = {
+  endpoint: null, segments: [], index: -1, objectUrl: null, span: null,
+  // 多選下載：已勾選的片段 id，以及最後一次點的列（Shift 範圍選取的起點）。
+  selected: new Set(), lastPicked: -1,
+};
 // 時間軸拖曳狀態。拖曳中要壓掉 timeupdate 對標頭的更新，否則播放中的時間會蓋掉
 // 使用者正在拉的目標時刻。
 const scrub = { active: false };
@@ -1119,9 +1123,13 @@ async function loadTimeline() {
   // API returns newest-first; play in chronological order.
   playback.segments = items.sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
   playback.index = -1;
+  // 換了一天，選取就沒有意義了（下載面板只列當天的片段）。
+  playback.selected.clear();
+  playback.lastPicked = -1;
 
   renderTimeline();
   renderBookmarks();   // chips + timeline markers (re-added after renderTimeline rebuilds the bar)
+  renderExportList();
   if (!playback.segments.length) {
     setPbStatus("這一天沒有錄影。", false);
   } else {
@@ -1167,6 +1175,7 @@ function renderTimeline() {
     block.title = `${timeLabel(start)} – ${timeLabel(end)}`;
     // 定位一律交給時間軸本身處理（見下方拖曳），色塊只負責顯示哪裡有錄影。
     block.tabIndex = -1;
+    block.classList.toggle("selected", playback.selected.has(seg.id));
     bar.appendChild(block);
   });
 }
@@ -1210,6 +1219,7 @@ async function playSegment(index, offsetSeconds) {
   if (!seg) return;
   playback.index = index;
   highlightBlock(index);
+  markPlayingRow(index);
   setPbStatus("載入片段…", false);
 
   const response = await fetch(`/api/recordings/segments/${seg.id}/video`, {
@@ -1304,6 +1314,254 @@ $("pb-bookmark").addEventListener("click", () => {
   }
 });
 
+/* ── 多選下載（匯出 MP4）───────────────────────────────────
+ *
+ * NAS／磁碟上的片段全是加密檔（.mp4.enc），直接拿是打不開的。這裡讓管理員
+ * 勾選當天的片段，一次 POST 給伺服器，由伺服器解密後串流成一個 ZIP
+ * （每段一個 MP4 + manifest.json）。每次下載在伺服器寫一筆 EXPORT_RECORDING
+ * 稽核，列出全部片段 id 與時間範圍。
+ *
+ * 瀏覽器支援 File System Access API 時（Chrome／Edge），先讓使用者選存檔位置，
+ * 再把回應串流直接寫進檔案——大量片段也不必整包塞進記憶體；其他瀏覽器退回
+ * blob 下載。 */
+
+const EXPORT_MAX_SEGMENTS = 300;   // 與伺服器 MAX_SEGMENTS_PER_EXPORT 一致
+const exporting = { busy: false };
+
+function fmtBytes(n) {
+  if (!n) return "0 MB";
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function fmtDuration(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(total / 60), sec = total % 60;
+  return m ? `${m} 分${sec ? ` ${sec} 秒` : ""}` : `${sec} 秒`;
+}
+
+function renderExportList() {
+  const list = $("pb-export-list");
+  list.replaceChildren();
+  const segs = playback.segments;
+  if (!segs.length) {
+    const empty = el("p", "這一天沒有錄影可下載。", "muted");
+    empty.style.cssText = "margin:.4rem 1.1rem;font-size:.75rem";
+    list.appendChild(empty);
+    updateExportSummary();
+    return;
+  }
+  segs.forEach((seg, i) => {
+    const rowNode = el("label", null, "picker-row");
+    rowNode.dataset.index = String(i);
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = playback.selected.has(seg.id);
+    // Shift 範圍選取：從上一次點的列到這一列，全部設成跟這次一樣的勾選狀態。
+    box.addEventListener("click", (event) => {
+      const checked = box.checked;
+      if (event.shiftKey && playback.lastPicked >= 0) {
+        const [a, b] = [Math.min(playback.lastPicked, i), Math.max(playback.lastPicked, i)];
+        for (let k = a; k <= b; k++) setSegmentSelected(k, checked);
+      } else {
+        setSegmentSelected(i, checked);
+      }
+      playback.lastPicked = i;
+      syncExportSelection();
+    });
+    const text = el("div", null, "picker-text");
+    text.appendChild(el("span", `${timeLabel(segStart(seg))} – ${timeLabel(segEnd(seg))}`, "picker-title"));
+    text.appendChild(el("span",
+      `${fmtDuration(segEnd(seg) - segStart(seg))} · ${fmtBytes(seg.sizeBytes)}`
+      + (seg.mode === "FULL" ? " · 完全" : ""), "picker-sub"));
+    const play = el("button", "播放", "ghost small pb-export-play");
+    play.type = "button";
+    play.title = "播放這一段";
+    play.addEventListener("click", (event) => {
+      event.preventDefault();       // 別讓 label 順便切換勾選
+      guard(() => playSegment(i, 0));
+    });
+    rowNode.append(box, text, play);
+    rowNode.classList.toggle("selected", box.checked);
+    rowNode.classList.toggle("playing", i === playback.index);
+    list.appendChild(rowNode);
+  });
+  updateExportSummary();
+}
+
+function setSegmentSelected(index, checked) {
+  const seg = playback.segments[index];
+  if (!seg) return;
+  if (checked) playback.selected.add(seg.id); else playback.selected.delete(seg.id);
+}
+
+/** 讓清單勾選框、列底色與時間軸色塊都跟 playback.selected 一致。 */
+function syncExportSelection() {
+  const rows = $("pb-export-list").querySelectorAll(".picker-row");
+  rows.forEach((rowNode) => {
+    const seg = playback.segments[Number(rowNode.dataset.index)];
+    const on = Boolean(seg && playback.selected.has(seg.id));
+    const box = rowNode.querySelector("input");
+    if (box) box.checked = on;
+    rowNode.classList.toggle("selected", on);
+  });
+  $("pb-timeline").querySelectorAll(".pb-block").forEach((block, i) => {
+    const seg = playback.segments[i];
+    block.classList.toggle("selected", Boolean(seg && playback.selected.has(seg.id)));
+  });
+  updateExportSummary();
+}
+
+function markPlayingRow(index) {
+  $("pb-export-list").querySelectorAll(".picker-row").forEach((rowNode) => {
+    rowNode.classList.toggle("playing", Number(rowNode.dataset.index) === index);
+  });
+}
+
+function selectedSegments() {
+  return playback.segments.filter((seg) => playback.selected.has(seg.id));
+}
+
+function updateExportSummary() {
+  const node = $("pb-export-summary");
+  const go = $("pb-export-go");
+  const picked = selectedSegments();
+  node.classList.remove("bad");
+  if (exporting.busy) return;          // 下載中由 exportSelected 自己更新文字
+  if (!picked.length) {
+    node.textContent = "尚未選取任何片段。";
+    go.textContent = "下載已選片段";
+    go.disabled = true;
+    return;
+  }
+  const bytes = picked.reduce((sum, seg) => sum + (seg.sizeBytes || 0), 0);
+  const first = segStart(picked[0]);
+  const last = segEnd(picked[picked.length - 1]);
+  let text = `已選 ${picked.length} 段 · 約 ${fmtBytes(bytes)} · ${timeLabel(first)}–${timeLabel(last)}`;
+  if (picked.length > EXPORT_MAX_SEGMENTS) {
+    text += `（一次最多 ${EXPORT_MAX_SEGMENTS} 段，請分批）`;
+    node.classList.add("bad");
+    go.disabled = true;
+  } else {
+    go.disabled = false;
+  }
+  node.textContent = text;
+  go.textContent = `下載已選片段（${picked.length}）`;
+}
+
+function setExportOpen(open) {
+  const panel = $("pb-export");
+  panel.hidden = !open;
+  $("pb-export-toggle").classList.toggle("active", open);
+  $("pb-export-toggle").setAttribute("aria-expanded", String(open));
+  $("playback-modal").querySelector(".modal-box").classList.toggle("pb-export-open", open);
+  if (open) renderExportList();
+}
+
+$("pb-export-toggle").addEventListener("click", () => setExportOpen($("pb-export").hidden));
+
+$("pb-export-all").addEventListener("click", () => {
+  playback.segments.forEach((seg) => playback.selected.add(seg.id));
+  syncExportSelection();
+});
+$("pb-export-none").addEventListener("click", () => {
+  playback.selected.clear();
+  playback.lastPicked = -1;
+  syncExportSelection();
+});
+$("pb-export-current").addEventListener("click", () => {
+  const seg = playback.segments[playback.index];
+  if (!seg) { flash("目前沒有在播放的片段。先播放到想下載的那一段。", true); return; }
+  playback.selected.add(seg.id);
+  playback.lastPicked = playback.index;
+  syncExportSelection();
+});
+
+$("pb-export-go").addEventListener("click", () => guard(exportSelected));
+
+async function exportSelected() {
+  if (exporting.busy) return;
+  const picked = selectedSegments();
+  if (!picked.length || picked.length > EXPORT_MAX_SEGMENTS) return;
+
+  const summary = $("pb-export-summary");
+  const go = $("pb-export-go");
+  const device = (playback.endpoint.deviceName || playback.endpoint.id.slice(0, 8))
+    .replace(/[^0-9A-Za-z\u4e00-\u9fff._-]+/g, "_").replace(/^[._-]+|[._-]+$/g, "") || "recording";
+  const day = ($("pb-date").value || "").replace(/-/g, "");
+  const suggested = `recording_${device}_${day}.zip`;
+
+  // File System Access API：要在使用者點擊的同一個手勢裡呼叫，所以放在 fetch 之前。
+  let handle = null;
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: suggested,
+        types: [{ description: "ZIP 壓縮檔", accept: { "application/zip": [".zip"] } }],
+      });
+    } catch (err) {
+      if (err && err.name === "AbortError") return;   // 使用者取消：不打伺服器、不寫稽核
+      handle = null;                                    // 政策關掉了 API 之類 → 退回 blob
+    }
+  }
+
+  exporting.busy = true;
+  go.disabled = true;
+  summary.classList.remove("bad");
+  summary.textContent = `正在準備 ${picked.length} 段…`;
+  try {
+    const response = await fetch("/api/recordings/segments/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + state.accessToken },
+      body: JSON.stringify({
+        segmentIds: picked.map((seg) => seg.id),
+        tzOffsetMinutes: -new Date().getTimezoneOffset(),
+      }),
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.message || "下載失敗。");
+    }
+
+    let received = 0;
+    const tick = () => { summary.textContent = `下載中… 已收到 ${fmtBytes(received)}`; };
+    if (handle && response.body) {
+      const writable = await handle.createWritable();
+      const reader = response.body.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          await writable.write(value);
+          received += value.byteLength;
+          tick();
+        }
+        await writable.close();
+      } catch (err) {
+        try { await writable.abort(); } catch { /* 已關閉 */ }
+        throw err;
+      }
+    } else {
+      // 沒有串流寫檔能力的瀏覽器：整包收完再用 blob 連結觸發下載。
+      const blob = await response.blob();
+      received = blob.size;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = suggested;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    }
+    flash(`已下載 ${picked.length} 段錄影（${fmtBytes(received)}）。此次匯出已記入稽核紀錄。`);
+  } finally {
+    exporting.busy = false;
+    updateExportSummary();
+  }
+}
+
 // Keyboard shortcuts, only while the playback modal is open and focus is not in a field.
 document.addEventListener("keydown", (e) => {
   if ($("playback-modal").hidden) return;
@@ -1317,6 +1575,7 @@ document.addEventListener("keydown", (e) => {
     case "[": $("pb-prev-seg").click(); break;
     case "]": $("pb-next-seg").click(); break;
     case "b": case "B": $("pb-bookmark").click(); break;
+    case "d": case "D": $("pb-export-toggle").click(); break;
   }
 });
 

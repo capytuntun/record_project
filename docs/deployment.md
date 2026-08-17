@@ -461,6 +461,10 @@ curl -sk --http1.1 -i -m 5 \
   Windows 上建。
 - **保留期限清理**：已內建每小時自動清理逾期錄影／截圖。要外部排程可用
   `sudo -u eem /opt/eem/server/.venv/bin/python -m flask --app wsgi sweep-recordings`（cron）。
+- **把錄影拿出來（下載 MP4）**：NAS／磁碟上的 `.mp4.enc` 是加密檔，直接開不了。
+  請在主控台「回放」視窗按「⬇ 下載」，勾選要的片段（可 Shift 選一段範圍），伺服器
+  會解密後打包成 ZIP（每段一個 MP4 ＋ `manifest.json`）；每次下載都記
+  `EXPORT_RECORDING` 稽核。一次最多 300 段。
 
 ### 8.1 端點安裝包（MSI）—— 必須在 Windows 上建
 

@@ -688,6 +688,7 @@
         </select>
       </label>
       <button id="pb-bookmark" class="ghost" title="在目前時刻加書籤（B）">＋ 書籤</button>
+      <button id="pb-export-toggle" class="ghost" title="勾選片段，解密後打包成 ZIP（內含 MP4）下載" aria-expanded="false" aria-controls="pb-export">⬇ 下載</button>
       <span id="pb-bookmarks" class="pb-bookmarks"></span>
     </div>
     <div class="pb-timeline-wrap">
@@ -697,7 +698,26 @@
       </div>
       <div class="pb-hint" id="pb-hint" hidden></div>
     </div>
-    <footer class="modal-foot"><span class="muted">回放已記入稽核紀錄。時間軸上拖曳可拉到任一時刻、滑過可預覽時間；色塊間空白代表當時沒有錄影。快捷鍵：空白＝播放／暫停、← →＝±5 秒、[ ]＝上／下一段、B＝書籤。</span></footer>
+    <!-- 多選下載：勾選當天的片段，伺服器解密後串流成一個 ZIP（每段一個 MP4 + manifest.json）。 -->
+    <section id="pb-export" class="pb-export" hidden aria-label="下載錄影">
+      <div class="pb-export-head">
+        <div class="picker-text">
+          <strong class="picker-title">下載錄影</strong>
+          <span class="picker-sub">勾選要下載的片段（按住 Shift 可選一段範圍）。伺服器會解密後打包成 ZIP，每段一個 MP4；下載會記入稽核紀錄。</span>
+        </div>
+        <div class="pb-export-actions">
+          <button id="pb-export-current" class="ghost small" title="把目前正在播放的片段加入選取">＋ 目前片段</button>
+          <button id="pb-export-all" class="ghost small">全選</button>
+          <button id="pb-export-none" class="ghost small">清除</button>
+        </div>
+      </div>
+      <div id="pb-export-list" class="picker pb-export-list"></div>
+      <div class="pb-export-foot">
+        <span id="pb-export-summary" class="muted">尚未選取任何片段。</span>
+        <button id="pb-export-go" class="primary" disabled>下載已選片段</button>
+      </div>
+    </section>
+    <footer class="modal-foot"><span class="muted">回放已記入稽核紀錄。時間軸上拖曳可拉到任一時刻、滑過可預覽時間；色塊間空白代表當時沒有錄影。快捷鍵：空白＝播放／暫停、← →＝±5 秒、[ ]＝上／下一段、B＝書籤、D＝下載面板。</span></footer>
   </div>
 </div>
 
