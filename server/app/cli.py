@@ -260,7 +260,10 @@ def check_config() -> None:
         elif not _os.path.isfile(current_app.config["FFMPEG_PATH"]):
             warnings.append(
                 f"Screen recording is off: FFmpeg not found at "
-                f"{current_app.config['FFMPEG_PATH']}. On Linux: apt install ffmpeg."
+                f"{current_app.config['FFMPEG_PATH']}. "
+                + ("Re-run server\\install.ps1 as administrator to install it "
+                   "(or pass -FfmpegPath for an offline copy), then restart."
+                   if _os.name == "nt" else "On Linux: apt install ffmpeg.")
             )
 
     # An auto-generated key lives next to the data; fine for internal use, but

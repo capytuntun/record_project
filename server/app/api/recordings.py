@@ -43,9 +43,24 @@ RECORDING_STATUS = "RECORDING_STATUS"
 @bp.get("/status")
 @require_permission(RECORDINGS_MANAGE)
 def recording_status():
-    """Whether the server can record (key + FFmpeg present)."""
+    """Whether the server can record (key + FFmpeg present), and if not, which
+    of the two is missing -- so the console can name the actual fix instead of
+    listing both. RECORDING_ENABLED is read once at startup, so a fix only
+    takes effect after a restart; ``missing`` reflects the same snapshot.
+    """
+    import os
+
+    config = current_app.config
+    enabled = bool(config.get("RECORDING_ENABLED"))
+    missing = []
+    if not enabled:
+        if not config.get("RECORDING_KEY_PASSPHRASE"):
+            missing.append("key")
+        if not os.path.isfile(config.get("FFMPEG_PATH") or ""):
+            missing.append("ffmpeg")
     return jsonify({
-        "enabled": bool(current_app.config.get("RECORDING_ENABLED")),
+        "enabled": enabled,
+        "missing": missing,
         "segmentSeconds": current_app.config["RECORDING_SEGMENT_SECONDS"],
         "defaultFps": current_app.config["RECORDING_FPS"],
         "defaultRetentionDays": current_app.config["RECORDING_DEFAULT_RETENTION_DAYS"],

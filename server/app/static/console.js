@@ -2283,8 +2283,19 @@ async function loadRecordings() {
   const status = await request("GET", "/api/recordings/status");
   const warning = $("rec-warning");
   if (!status.enabled) {
+    const missing = status.missing || [];
+    const reasons = [];
+    if (missing.includes("ffmpeg")) {
+      reasons.push("伺服器上找不到 FFmpeg（以系統管理員身分重跑 server\\install.ps1 會自動安裝）");
+    }
+    if (missing.includes("key")) {
+      reasons.push("沒有畫面加密金鑰（請設定 EEM_RECORDING_KEY，或移除 EEM_RECORDING_AUTO_KEY=0）");
+    }
+    if (!reasons.length) {
+      reasons.push("伺服器需設定加密金鑰且 FFmpeg 存在；補齊後請重新啟動伺服器");
+    }
     warning.textContent =
-      "錄影未啟用：伺服器需設定 EEM_RECORDING_KEY（加密金鑰）且 FFmpeg 存在，才能錄影。目前可設定政策但不會實際錄製。";
+      `錄影未啟用：${reasons.join("；")}。目前可設定政策但不會實際錄製。`;
     warning.hidden = false;
   } else {
     warning.hidden = true;

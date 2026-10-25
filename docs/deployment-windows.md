@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File server\install.ps1
 | | Windows | Linux |
 | --- | --- | --- |
 | 主控台、RBAC、稽核、即時畫面、螢幕牆 | ✅ | ✅ |
-| 螢幕錄影／截圖、NAS 儲存 | ✅（需 `server\tools\ffmpeg\ffmpeg.exe`） | ✅（`apt install ffmpeg`） |
+| 螢幕錄影／截圖、NAS 儲存 | ✅（FFmpeg 由 install.ps1 自動安裝） | ✅（`apt install ffmpeg`） |
 | **主控台直接產生 MSI 安裝包** | ✅ **可以**（WiX 只支援 Windows） | ❌ 要另外找一台 Windows 建（見 `deployment.md` §8.1） |
 | MSI 簽章 | ✅ | ❌ |
 | HTTPS | 程式自己終結 TLS（可改用 nginx，見 [`nginx-windows.md`](nginx-windows.md)） | nginx 終結 TLS |
@@ -59,7 +59,7 @@ powershell -ExecutionPolicy Bypass -File server\install.ps1
 | 權限 | 系統管理員（UAC） |
 | Python | **3.11 以上**；沒有的話腳本會試著用 winget 裝 |
 | .NET SDK | 只有「要在主控台建 MSI」才需要（WiX 與 Agent 執行檔都靠它）；沒有的話腳本會用 winget 裝 |
-| FFmpeg | 只有「螢幕錄影」需要，放在 `server\tools\ffmpeg\ffmpeg.exe` |
+| FFmpeg | 只有「螢幕錄影」需要；腳本會自動下載到 `C:\EEM\tools\ffmpeg\ffmpeg.exe`（核對 SHA-256）。離線環境用 `-FfmpegPath <ffmpeg.exe>` 指定 |
 
 安裝完的樣子：
 
@@ -126,8 +126,10 @@ C:\EEM\
 -NoPackaging            不裝 .NET SDK 與 WiX（不需要在這台建安裝包）
 -NoFirewall             不動防火牆
 -Uninstall              移除排程工作與防火牆規則（資料保留）
--Uninstall -Purge       連同 C:\EEM 一併刪除
+-Uninstall -Purge       連同 C:\EEM 一併刪除（要輸入 DELETE 確認；-Force 略過）
 ```
+
+完全移除建議直接用 `uninstall.ps1`，見下方〈解除安裝〉。
 
 無人值守安裝可先設環境變數 `EEM_ADMIN_PASSWORD` 指定密碼（政策：至少 12 碼，
 大寫／小寫／數字／符號四類中至少三類）。
@@ -155,10 +157,29 @@ powershell -ExecutionPolicy Bypass -File server\install.ps1
 
 ### 解除安裝
 
+**以系統管理員身分**執行：
+
 ```powershell
-.\install.ps1 -Uninstall            # 留資料
-.\install.ps1 -Uninstall -Purge     # 全部刪掉
+powershell -ExecutionPolicy Bypass -File server\uninstall.ps1             # 完全刪除（要輸入 DELETE 確認）
+powershell -ExecutionPolicy Bypass -File server\uninstall.ps1 -KeepData   # 只移除服務，資料留著
+powershell -ExecutionPolicy Bypass -File server\uninstall.ps1 -Force      # 無人值守，不詢問
 ```
+
+完全刪除會依序：停止並移除排程工作 → 結束相關行程（python、錄影中的 ffmpeg、
+建置中的 wix）→ 移除防火牆規則 → 刪除服務帳號設定檔裡的 WiX 擴充 → 刪除整個
+`C:\EEM`（資料庫、錄影、截圖、加密金鑰、TLS 憑證、`.env`、FFmpeg、WiX）。
+有檔案刪不掉時會列出來並以失敗結束，重新開機後再跑一次即可。
+
+**不會**刪除的：
+
+* Python、.NET SDK —— 共用元件，要移除請到「設定 → 應用程式」。
+* `.env` 指到 `C:\EEM` 以外的資料（`EEM_RECORDING_DIR` 等、外部資料庫）—— 結束時會列出來。
+* 已拋轉到 FTP／SMB 的錄影。
+* 各端點的 Agent —— 請在端點用 `msiexec /x` 解除安裝（見 README）。解除密碼包在
+  安裝包裡，伺服器刪掉之後仍可解除安裝。
+
+> ⚠️ 刪除後**無法復原**。要保留錄影，先備份 `C:\EEM\server\instance\`（含 `recording.key`，
+> 少了它錄影無法解密）。
 
 ---
 

@@ -23,6 +23,41 @@ powershell -ExecutionPolicy Bypass -File server\install.ps1
 
 跑完就是可以登入的系統，最後會印出網址與管理員密碼，密碼只會顯示一次
 
+## 移除伺服器
+**以系統管理員身分**開啟 PowerShell，在專案根目錄執行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server\uninstall.ps1
+```
+
+畫面會列出將刪除的內容，輸入 `DELETE`（大寫）才會開始刪除，輸入其他內容則取消、不做任何變更。
+
+| 寫法 | 效果 |
+| --- | --- |
+| `server\uninstall.ps1` | 完全刪除（要輸入 `DELETE` 確認） |
+| `server\uninstall.ps1 -KeepData` | 只移除服務與防火牆規則，`C:\EEM` 保留；之後重跑 `install.ps1` 即可原樣復原 |
+| `server\uninstall.ps1 -Force` | 完全刪除，不詢問（無人值守用） |
+| `server\uninstall.ps1 -InstallDir D:\EEM` | 安裝時改過位置的話，用這個指定（必須是完整路徑） |
+
+完全刪除會依序：
+1. 停止並移除排程工作 `EEMManagementServer`
+2. 結束相關行程（伺服器的 python、錄影中的 ffmpeg、建置安裝包中的 wix）
+3. 移除防火牆規則「螢幕測錄系統」
+4. 刪除服務帳號（SYSTEM）設定檔裡的 WiX 擴充
+5. 刪除整個 `C:\EEM`：資料庫、所有錄影與截圖、畫面加密金鑰、TLS 憑證與私鑰、`.env`、FFmpeg、WiX
+
+**不會**刪除的：
+- Python、.NET SDK：共用元件，要移除請到「設定 → 應用程式」
+- `.env` 指到 `C:\EEM` 以外的資料（例如 `EEM_RECORDING_DIR`、外部資料庫）：結束時會列出位置
+- 已拋轉到 FTP／SMB 的錄影
+- 端點上的 Agent：請在各端點用 `msiexec /x` 解除安裝（見下方〈端點安裝包〉）。解除密碼存在安裝包裡，伺服器刪掉之後端點仍可解除安裝
+
+> ⚠️ 刪除後**無法復原**。要保留錄影，先備份 `C:\EEM\server\instance\`（一定要含 `recording.key`，少了它錄影無法解密）。
+
+有檔案刪不掉時（通常是還有程式開著），腳本會列出剩下的檔案並以失敗結束。這時重新開機，再執行一次 `server\uninstall.ps1` 即可。
+
+為了防止誤刪，遇到以下情況會拒絕刪除：磁碟根目錄、相對路徑、原始碼資料夾（有 `.git`），或底下沒有 `server\` 的資料夾。
+
 
 ##  需求
 
@@ -32,7 +67,7 @@ powershell -ExecutionPolicy Bypass -File server\install.ps1
 | 權限 | 系統管理員（UAC） |
 | Python | **3.11 以上**；沒有的話腳本會試著用 winget 裝 |
 | .NET SDK | 只有「要在主控台建 MSI」才需要（WiX 與 Agent 執行檔都靠它）；沒有的話腳本會用 winget 裝 |
-| FFmpeg | 只有「螢幕錄影」需要，放在 `server\tools\ffmpeg\ffmpeg.exe` |
+| FFmpeg | 只有「螢幕錄影」需要；腳本會自動下載到 `C:\EEM\tools\ffmpeg\ffmpeg.exe`（核對 SHA-256）。離線環境用 `-FfmpegPath <ffmpeg.exe>` 指定 |
 
 ## 服務控制
 

@@ -369,3 +369,26 @@ def test_export_without_key_conflicts(client, app, super_admin_token, tmp_path):
                        json={"segmentIds": [seeded[0][0]]},
                        headers=auth_header(super_admin_token))
     assert resp.status_code == 409
+
+
+def test_status_names_what_is_missing(client, app, super_admin_token, tmp_path):
+    """The console warning names the actual fix, so the status must say which
+    of key / FFmpeg is absent -- not just that recording is off."""
+    app.config["RECORDING_ENABLED"] = False
+    app.config["RECORDING_KEY_PASSPHRASE"] = "test-passphrase"
+    app.config["FFMPEG_PATH"] = str(tmp_path / "no-such-ffmpeg.exe")
+
+    body = client.get("/api/recordings/status",
+                      headers=auth_header(super_admin_token)).get_json()
+    assert body["enabled"] is False
+    assert body["missing"] == ["ffmpeg"]
+
+    app.config["RECORDING_KEY_PASSPHRASE"] = None
+    body = client.get("/api/recordings/status",
+                      headers=auth_header(super_admin_token)).get_json()
+    assert body["missing"] == ["key", "ffmpeg"]
+
+    _enable_recording(app)
+    body = client.get("/api/recordings/status",
+                      headers=auth_header(super_admin_token)).get_json()
+    assert body["enabled"] is True and body["missing"] == []

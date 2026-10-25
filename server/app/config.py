@@ -76,6 +76,28 @@ def _load_or_create_recording_key(instance_dir: str) -> str:
         return handle.read().strip()
 
 
+def _default_ffmpeg(server_dir: str) -> str:
+    """Where FFmpeg is when EEM_FFMPEG_PATH is not set.
+
+    Windows has no system FFmpeg, so install.ps1 provisions one into
+    ``<InstallDir>\\tools\\ffmpeg`` (next to WiX, outside the server tree that
+    an upgrade mirrors over). ``server\\tools\\ffmpeg`` is the older documented
+    spot for a hand-placed copy; PATH is the last resort. The first existing
+    file wins; if none exists the installer location is returned so the
+    "not found" message points where the file is expected.
+    """
+    if os.name != "nt":
+        return shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
+    candidates = [
+        os.path.join(os.path.dirname(server_dir), "tools", "ffmpeg", "ffmpeg.exe"),
+        os.path.join(server_dir, "tools", "ffmpeg", "ffmpeg.exe"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return os.path.normpath(path)
+    return shutil.which("ffmpeg") or os.path.normpath(candidates[0])
+
+
 class Config:
     """Configuration assembled from the process environment."""
 
@@ -213,16 +235,9 @@ class Config:
         # Frames are encoded to H.264 by FFmpeg and written as AES-encrypted
         # segment files. Frames themselves NEVER touch the database; only
         # segment metadata is indexed.
-        # FFmpeg location. On Windows we ship it under server/tools/ffmpeg; on
-        # Linux/macOS we find the system install (apt install ffmpeg), so a
-        # normal server needs no path configuration.
-        if os.name == "nt":
-            default_ffmpeg = os.path.normpath(os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "..", "tools", "ffmpeg", "ffmpeg.exe"
-            ))
-        else:
-            default_ffmpeg = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
-        self.FFMPEG_PATH = os.environ.get("EEM_FFMPEG_PATH", default_ffmpeg)
+        # FFmpeg location. On Linux/macOS we find the system install (apt install
+        # ffmpeg), so a normal server needs no path configuration.
+        self.FFMPEG_PATH = os.environ.get("EEM_FFMPEG_PATH", "").strip() or _default_ffmpeg(repo_root)
         self.RECORDING_DIR = os.environ.get(
             "EEM_RECORDING_DIR", os.path.join(repo_root, "instance", "recordings")
         )

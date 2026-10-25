@@ -9,9 +9,10 @@
 
     做完這些事：Python 虛擬環境 → 隨機密鑰 .env → 自簽 TLS 憑證 → 建資料庫 →
     建第一個最高管理員 → 開機自動啟動的排程工作 → 防火牆規則 → .NET SDK + WiX
-    （讓主控台可以直接產生 MSI 安裝包）。
+    （讓主控台可以直接產生 MSI 安裝包）→ FFmpeg（螢幕錄影用）。
 
-    缺 Python 3.11+ 或 .NET SDK 時會用 winget 自動補齊，不需要事先手動安裝。
+    缺 Python 3.11+ 或 .NET SDK 時會用 winget 自動補齊，不需要事先手動安裝；
+    FFmpeg 則直接下載官方建置版並核對 SHA-256。
 
     和 Linux 版（install.sh）的差別：Windows 單機不另外架反向代理，**由程式自己
     終結 TLS**（0.0.0.0:443），所以裝完就能用 https:// 連。
@@ -27,8 +28,17 @@
 .PARAMETER CertPath
     自己的憑證（.pfx）。不給就產生自簽憑證。
 
+.PARAMETER FfmpegPath
+    指定一個現成的 ffmpeg.exe（離線環境用）。不給就先找本機現有的，找不到再下載。
+    必須是含 libx264 的靜態建置版（例如 gyan.dev 的 essentials）。
+
+.PARAMETER NoRecording
+    略過 FFmpeg。不裝 FFmpeg 時伺服器照常運作，只是不會錄影。
+
 .PARAMETER Uninstall
-    移除排程工作與防火牆規則（資料保留）。加 -Purge 連同資料一併刪除。
+    移除排程工作、相關行程與防火牆規則（資料保留）。加 -Purge 連同整個安裝目錄
+    一併刪除（會要求輸入 DELETE 確認，加 -Force 略過）。完全移除建議直接用
+    uninstall.ps1。
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File server\install.ps1
@@ -45,9 +55,12 @@ param(
     [string]$CertPath,
     [string]$CertPassword,
     [switch]$NoPackaging,
+    [string]$FfmpegPath,
+    [switch]$NoRecording,
     [switch]$NoFirewall,
     [switch]$Uninstall,
-    [switch]$Purge
+    [switch]$Purge,
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
@@ -83,34 +96,180 @@ if (-not (Test-Admin)) {
 
 # ---------------------------------------------------------------- 解除安裝
 
+function Test-UnderDir {
+    param([string]$Path, [string]$Dir)
+    $root = $Dir.TrimEnd('\') + '\'
+    return $Path -and ($Path + '\').StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-ExternalData {
+    # .env 可以把資料指到安裝目錄以外。那些位置是使用者自己選的（可能是整顆
+    # 資料碟或共用資料夾），不替他刪，只在最後列出來。
+    param([string]$Root)
+    $notes = @()
+    $envFile = Join-Path $Root "server\.env"
+    if (-not (Test-Path -LiteralPath $envFile)) { return $notes }
+    $vals = @{}
+    foreach ($line in (Get-Content -LiteralPath $envFile -ErrorAction SilentlyContinue)) {
+        if ($line -match '^\s*(EEM_[A-Z_]+)\s*=\s*(.*?)\s*$') { $vals[$Matches[1]] = $Matches[2].Trim('"') }
+    }
+    foreach ($k in @("EEM_RECORDING_DIR", "EEM_SCREENSHOT_DIR", "EEM_PACKAGE_OUTPUT_DIR")) {
+        $p = $vals[$k]
+        if ($p -and [IO.Path]::IsPathRooted($p) -and -not (Test-UnderDir $p $Root)) {
+            $notes += "$k=$p（在安裝目錄外，沒有刪除）"
+        }
+    }
+    $db = $vals["EEM_DATABASE_URI"]
+    if ($db -and $db -notmatch '^sqlite:') {
+        $notes += "資料庫 $($db -replace '//[^@/]*@', '//***@')（外部資料庫，沒有刪除）"
+    } elseif ($db -match '^sqlite:///(.+)$' -and [IO.Path]::IsPathRooted($Matches[1]) -and
+              -not (Test-UnderDir $Matches[1] $Root)) {
+        $notes += "資料庫 $($Matches[1])（在安裝目錄外，沒有刪除）"
+    }
+    return $notes
+}
+
+function Stop-InstallProcesses {
+    # 排程工作只是起點：cmd → python，python 底下還有錄影中的 ffmpeg、建安裝包中的
+    # wix／dotnet。任何一個活著，它開著的檔案就刪不掉。以「執行檔或命令列落在安裝
+    # 目錄下」認定，但跳過自己與祖先行程 —— 從 C:\EEM\server 執行本腳本時，自己的
+    # 命令列也含安裝目錄。
+    param([string]$Root)
+    $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $keep = @{}
+    $cur = [int]$PID
+    while ($cur -and -not $keep.ContainsKey($cur)) {
+        $keep[$cur] = $true
+        $parent = $all | Where-Object { [int]$_.ProcessId -eq $cur } | Select-Object -First 1
+        $cur = if ($parent) { [int]$parent.ParentProcessId } else { 0 }
+    }
+    $victims = @($all | Where-Object {
+        -not $keep.ContainsKey([int]$_.ProcessId) -and (
+            (Test-UnderDir $_.ExecutablePath $Root) -or
+            ($_.CommandLine -and $_.CommandLine.IndexOf($Root.TrimEnd('\') + '\',
+                [StringComparison]::OrdinalIgnoreCase) -ge 0))
+    })
+    foreach ($p in $victims) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($victims) {
+        Ok "已結束 $($victims.Count) 個相關行程（$((@($victims.Name) | Select-Object -Unique) -join '、')）"
+        Start-Sleep -Seconds 2   # 讓系統釋放檔案控制代碼
+    }
+}
+
+function Repair-Acl {
+    # 安裝時把 tls\key.pem 的繼承權限拿掉、連系統管理員都只給讀取（保護私鑰），
+    # Remove-Item -Force 要先改檔案屬性，沒有寫入權限就刪不掉。先取得擁有權
+    # （擁有者一定能改權限），再把權限恢復成從上層繼承，就能正常刪除。
+    # 由上而下處理，子項目才會繼承到已修好的上層權限。
+    param([string]$Path)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"   # 同 Invoke-Flask：原生程式的 stderr 不是致命錯誤
+    try {
+        $items = @(Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue) +
+                 @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue)
+        foreach ($it in $items) {
+            & takeown.exe /F $it.FullName /A 2>&1 | Out-Null
+            & icacls.exe $it.FullName /reset /C /Q 2>&1 | Out-Null
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 function Remove-Installation {
-    Step "移除螢幕測錄系統服務"
+    $root = [IO.Path]::GetFullPath($InstallDir).TrimEnd('\')
+    $external = @()
+
+    if ($Purge) {
+        # 擋掉打錯 -InstallDir 的災難：相對路徑（"C:" 指的是目前目錄）、磁碟根目錄、
+        # 原始碼資料夾（它也有 server\），或看起來不是本系統的目錄都不刪。
+        if ($InstallDir -notmatch '^([A-Za-z]:[\\/]|\\\\)') {
+            Die "-InstallDir 必須是完整路徑（例如 C:\EEM），收到的是 '$InstallDir'。"
+        }
+        if ([IO.Path]::GetPathRoot($root).TrimEnd('\') -eq $root) {
+            Die "拒絕刪除磁碟根目錄 $root。請確認 -InstallDir。"
+        }
+        if (Test-Path -LiteralPath (Join-Path $root ".git")) {
+            Die "$root 是原始碼資料夾（有 .git），不是安裝目錄，不刪除。"
+        }
+        if ((Test-Path -LiteralPath $root) -and -not (Test-Path -LiteralPath (Join-Path $root "server"))) {
+            Die "$root 底下沒有 server\，看起來不是螢幕測錄系統的安裝目錄，不刪除。"
+        }
+        $external = @(Get-ExternalData $root)
+        if (-not $Force) {
+            Write-Host ""
+            Write-Host "將永久刪除 $root，包含：" -ForegroundColor Yellow
+            Write-Host "  資料庫、所有錄影與截圖、畫面加密金鑰、TLS 憑證與私鑰、.env、FFmpeg、WiX" -ForegroundColor Yellow
+            Write-Host "刪除後無法復原；要保留錄影請先備份 $root\server\instance\。" -ForegroundColor Yellow
+            try { $answer = Read-Host "確定要刪除請輸入 DELETE" }
+            catch { Die "無法互動確認。確定要刪除請加 -Force。" }
+            if ($answer -cne "DELETE") { Write-Host "已取消，沒有變更任何東西。"; exit 1 }
+        }
+    }
+
+    Step "停止並移除服務"
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($task) {
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        Ok "已停止並移除排程工作"
+        Ok "已停止並移除排程工作 $TaskName"
     } else {
         Info "沒有找到排程工作 $TaskName"
     }
-    # 服務行程可能還在跑（排程工作只是啟動它）
-    Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*$AppDir*" } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Stop-InstallProcesses $root
 
     if (Get-NetFirewallRule -DisplayName $FirewallRule -ErrorAction SilentlyContinue) {
         Remove-NetFirewallRule -DisplayName $FirewallRule
-        Ok "已移除防火牆規則"
+        Ok "已移除防火牆規則「$FirewallRule」"
     }
 
-    if ($Purge) {
-        Warn "-Purge：將刪除 $InstallDir（含資料庫、錄影、加密金鑰）"
-        Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
-        Ok "已刪除 $InstallDir"
-    } else {
-        Info "資料保留在 $InstallDir（要一併刪除請加 -Purge）"
+    if (-not $Purge) {
+        Info "資料保留在 $root（要一併刪除請改用 .\uninstall.ps1，或加 -Purge）"
+        Write-Host "`n解除安裝完成（資料保留）。" -ForegroundColor Green
+        return
     }
-    Write-Host "`n解除安裝完成。" -ForegroundColor Green
+
+    Step "刪除檔案"
+    # 安裝時把 WiX 擴充複製進 SYSTEM 的設定檔（服務帳號找擴充用），那份只有本系統在用。
+    $sysProfileRaw = (Get-ItemProperty `
+        "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18" `
+        -ErrorAction SilentlyContinue).ProfileImagePath
+    if ($sysProfileRaw) {
+        $sysWix = Join-Path ([Environment]::ExpandEnvironmentVariables($sysProfileRaw)) ".wix"
+        if (Test-Path -LiteralPath $sysWix) {
+            Remove-Item -LiteralPath $sysWix -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $sysWix) { Warn "無法刪除 $sysWix" }
+            else { Ok "已刪除服務帳號的 WiX 擴充（$sysWix）" }
+        }
+    }
+
+    if (Test-Path -LiteralPath $root) {
+        # 目前目錄若在安裝目錄裡，那一層會刪不掉。
+        Set-Location -LiteralPath $env:TEMP
+        for ($i = 1; $i -le 5 -and (Test-Path -LiteralPath $root); $i++) {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $root) {
+                # 第一次刪不掉多半是權限（見 Repair-Acl），修一次；之後才當成檔案被鎖住在等。
+                if ($i -eq 1) { Repair-Acl $root } else { Start-Sleep -Seconds 2 }
+            }
+        }
+        if (Test-Path -LiteralPath $root) {
+            $left = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue)
+            Warn "$root 沒有刪乾淨（剩 $($left.Count) 個檔案），例如："
+            $left | Select-Object -First 5 | ForEach-Object { Info "  $($_.FullName)" }
+            Die "可能有程式還開著這些檔案。重新開機後再執行一次 .\uninstall.ps1 即可。"
+        }
+        Ok "已刪除 $root"
+    } else {
+        Info "沒有 $root，略過"
+    }
+
+    Write-Host "`n伺服器已完全移除。" -ForegroundColor Green
+    foreach ($n in $external) { Warn $n }
+    Info "保留的共用元件（其他程式可能也在用，需要的話到「設定 → 應用程式」移除）："
+    Info "  Python、.NET SDK、$env:USERPROFILE\.wix（WiX 擴充快取）"
+    Info "已部署的端點 Agent 不受影響，會持續嘗試連線；請在各端點用 msiexec /x 解除安裝。"
+    Info "已拋轉到 FTP／SMB 儲存位置的錄影也不會被刪除。"
 }
 
 if ($Uninstall) { Remove-Installation; exit 0 }
@@ -344,8 +503,9 @@ if ($existing -and $existing.State -eq "Running") {
 
 New-Item -ItemType Directory -Force -Path $AppDir, $HomeDir | Out-Null
 # /MIR 會鏡射，但 /XD 排除的目錄不會被刪 -> .env 與 instance\ 在升級時安全。
+# tools\ 也排除：舊文件教人把 ffmpeg.exe 放在 server\tools\ffmpeg，鏡射會把它刪掉。
 $rc = robocopy $srcServer $AppDir /MIR /NFL /NDL /NJH /NJS /NP `
-    /XD ".venv" "instance" "__pycache__" ".pytest_cache" `
+    /XD ".venv" "instance" "__pycache__" ".pytest_cache" "tools" `
     /XF ".env"
 if ($LASTEXITCODE -ge 8) { Die "複製程式碼失敗（robocopy 代碼 $LASTEXITCODE）" }
 Ok "伺服器程式碼已同步"
@@ -615,6 +775,155 @@ if (-not $NoPackaging) {
     }
 }
 
+# ---------------------------------------------------------------- FFmpeg（螢幕錄影）
+#
+# 伺服器把 Agent 傳來的 JPEG 交給 FFmpeg 編成 H.264；沒有 FFmpeg 就不會錄影，
+# 主控台「錄影」頁會一直顯示「錄影未啟用」。Windows 沒有系統內建的 FFmpeg，
+# 所以這裡備好一份，放在 $InstallDir\tools\ffmpeg（和 WiX 同層，不在升級時會被
+# 鏡射覆蓋的 server\ 底下）。app\config.py 預設就找這個位置，不必寫進 .env。
+
+function Test-Ffmpeg {
+    # 實際跑一次才算數：檔案在不代表能用（shared 建置版只帶 exe 會缺 DLL），
+    # 而錄影用的是 libx264，少了它要等到第一段錄影才會失敗。
+    param([string]$Exe)
+    if (-not $Exe -or -not (Test-Path -LiteralPath $Exe -PathType Leaf)) { return $false }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"   # 同 Invoke-Flask：原生程式的 stderr 不是致命錯誤
+    try {
+        $out = & $Exe -hide_banner -encoders 2>$null | Out-String
+        return ($LASTEXITCODE -eq 0) -and ($out -match '\blibx264\b')
+    } catch {
+        return $false
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+function Get-FfmpegDownload {
+    # 下載、核對 SHA-256、只解出 bin\ffmpeg.exe。回傳它的路徑，全部來源都失敗回傳 $null。
+    # 兩個來源都是 FFmpeg 官網列出的 Windows 建置版，皆為含 libx264 的靜態建置。
+    param([string]$WorkDir)
+    $sources = @(
+        @{ Name = "gyan.dev"
+           Zip  = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+           Sha  = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256"
+           File = "" },
+        @{ Name = "GitHub BtbN"
+           Zip  = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+           Sha  = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256"
+           File = "ffmpeg-master-latest-win64-gpl.zip" }
+    )
+    # PowerShell 5.1 不一定預設啟用 TLS 1.2，而兩個來源都要求它。
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+    foreach ($src in $sources) {
+        $zipPath = Join-Path $WorkDir "ffmpeg.zip"
+        try {
+            Info "從 $($src.Name) 下載 FFmpeg（約 100 MB）…"
+            $shaText = (Invoke-WebRequest -Uri $src.Sha -UseBasicParsing -TimeoutSec 60).Content
+            if ($shaText -is [byte[]]) { $shaText = [Text.Encoding]::ASCII.GetString($shaText) }
+            # gyan.dev 的 .sha256 只有一個雜湊；BtbN 的是「雜湊  檔名」一檔一行。
+            $line = $shaText
+            if ($src.File) {
+                $line = $shaText -split "`r?`n" |
+                        Where-Object { $_ -match ("\s\*?" + [regex]::Escape($src.File) + "\s*$") } |
+                        Select-Object -First 1
+            }
+            if (-not ("$line" -match '([0-9a-fA-F]{64})')) { throw "讀不到 SHA-256 校驗值" }
+            $expected = $Matches[1].ToLower()
+
+            Invoke-WebRequest -Uri $src.Zip -OutFile $zipPath -UseBasicParsing -TimeoutSec 900
+            $actual = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower()
+            if ($actual -ne $expected) { throw "SHA-256 不符（預期 $expected，實際 $actual）" }
+
+            $zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
+            try {
+                $entry = $zip.Entries |
+                         Where-Object { $_.FullName -match '(^|/)bin/ffmpeg\.exe$' } |
+                         Select-Object -First 1
+                if (-not $entry) { throw "壓縮檔裡沒有 bin/ffmpeg.exe" }
+                $exe = Join-Path $WorkDir "ffmpeg.exe"
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $exe, $true)
+            } finally {
+                $zip.Dispose()
+            }
+            return $exe
+        } catch {
+            Warn "$($src.Name) 下載失敗：$($_.Exception.Message)"
+        } finally {
+            Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return $null
+}
+
+$ffReady = $false
+if ($NoRecording) {
+    Info "-NoRecording：略過 FFmpeg（伺服器不會錄影）"
+} else {
+    Step "FFmpeg（螢幕錄影）"
+    $ffDir = Join-Path $InstallDir "tools\ffmpeg"
+    $ffExe = Join-Path $ffDir "ffmpeg.exe"
+    New-Item -ItemType Directory -Force -Path $ffDir | Out-Null
+
+    # 已就位且能用就不動它（錄影中的 ffmpeg.exe 也可能被鎖住，覆寫只會失敗）。
+    $ffReady = Test-Ffmpeg $ffExe
+    if ($ffReady) {
+        Ok "FFmpeg 已就緒（$ffExe）"
+    } else {
+        # 先用現成的：-FfmpegPath、舊文件說的 server\tools\ffmpeg、PATH 上的。
+        $candidates = @()
+        if ($FfmpegPath) { $candidates += $FfmpegPath }
+        $candidates += (Join-Path $AppDir "tools\ffmpeg\ffmpeg.exe")
+        $candidates += (Join-Path $srcServer "tools\ffmpeg\ffmpeg.exe")
+        $onPath = Get-Command ffmpeg -ErrorAction SilentlyContinue
+        if ($onPath) { $candidates += $onPath.Source }
+
+        foreach ($c in ($candidates | Select-Object -Unique)) {
+            if (-not (Test-Ffmpeg $c)) {
+                if ($c -eq $FfmpegPath) {
+                    Warn "-FfmpegPath 指定的 $c 無法使用（不存在、無法執行，或不含 libx264）"
+                }
+                continue
+            }
+            # 複製到服務帳號（SYSTEM）一定讀得到的位置；複製後再驗一次，
+            # 因為 shared 建置版離開它的 DLL 就跑不起來。
+            Copy-Item -LiteralPath $c -Destination $ffExe -Force
+            if (Test-Ffmpeg $ffExe) {
+                Ok "使用現有的 FFmpeg（$c → $ffExe）"
+                $ffReady = $true
+                break
+            }
+            Warn "$c 複製出來無法單獨執行（可能是需要 DLL 的 shared 建置版），略過"
+        }
+
+        if (-not $ffReady -and -not $FfmpegPath) {
+            $ffWork = Join-Path $env:TEMP ("eem-ffmpeg-" + [guid]::NewGuid().ToString("N"))
+            New-Item -ItemType Directory -Force -Path $ffWork | Out-Null
+            try {
+                $downloaded = Get-FfmpegDownload $ffWork
+                if ($downloaded -and (Test-Ffmpeg $downloaded)) {
+                    Copy-Item -LiteralPath $downloaded -Destination $ffExe -Force
+                    $ffReady = Test-Ffmpeg $ffExe
+                }
+            } finally {
+                Remove-Item -LiteralPath $ffWork -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            if ($ffReady) { Ok "FFmpeg 已下載並驗證（$ffExe）" }
+        }
+    }
+
+    if (-not $ffReady) {
+        # 不留一個壞掉的檔：config.py 只看檔案在不在，留著會讓錄影「看似啟用」卻編碼失敗。
+        Remove-Item -LiteralPath $ffExe -Force -ErrorAction SilentlyContinue
+        Warn "沒有可用的 FFmpeg —— 伺服器照常運作，但不會錄影（主控台「錄影」頁會顯示「錄影未啟用」）。"
+        Warn "離線環境：到 https://www.gyan.dev/ffmpeg/builds/ 下載 essentials 版，"
+        Warn "解壓後以 -FfmpegPath <路徑>\bin\ffmpeg.exe 重跑本腳本。"
+    }
+}
+
 # ---------------------------------------------------------------- 服務
 
 Step "註冊開機自動啟動"
@@ -709,11 +1018,17 @@ Write-Host "  安裝位置     $AppDir"
 Write-Host "  設定檔       $envPath"
 Write-Host "  資料與金鑰   $AppDir\instance\（eem.db、recording.key、tls\、錄影、截圖）"
 Write-Host "  記錄檔       $AppDir\instance\server.log"
+if ($ffReady) {
+    Write-Host "  螢幕錄影     可用（FFmpeg：$InstallDir\tools\ffmpeg\ffmpeg.exe）"
+} else {
+    Write-Host "  螢幕錄影     " -NoNewline
+    Write-Host "未啟用（沒有 FFmpeg，見上方說明）" -ForegroundColor Yellow
+}
 Write-Host ""
 Write-Host "  重新啟動     Restart-ScheduledTask -TaskName $TaskName"
 Write-Host "  停止         Stop-ScheduledTask -TaskName $TaskName"
 Write-Host "  升級／修復   重跑本腳本（資料會保留）"
-Write-Host "  解除安裝     .\install.ps1 -Uninstall"
+Write-Host "  完全移除     .\uninstall.ps1（加 -KeepData 保留資料）"
 if ($certKind -eq "self-signed") {
     Write-Host ""
     Write-Host "  憑證是自簽的" -ForegroundColor Yellow -NoNewline
