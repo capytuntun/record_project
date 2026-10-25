@@ -102,6 +102,17 @@ function Test-UnderDir {
     return $Path -and ($Path + '\').StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Read-EnvFile {
+    # 讀 .env 的 EEM_* 設定成 hashtable；檔案不在就回空的。
+    param([string]$Path)
+    $vals = @{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $vals }
+    foreach ($line in (Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)) {
+        if ($line -match '^\s*(EEM_[A-Z_]+)\s*=\s*(.*?)\s*$') { $vals[$Matches[1]] = $Matches[2].Trim('"') }
+    }
+    return $vals
+}
+
 function Get-ExternalData {
     # .env 可以把資料指到安裝目錄以外。那些位置是使用者自己選的（可能是整顆
     # 資料碟或共用資料夾），不替他刪，只在最後列出來。
@@ -109,10 +120,7 @@ function Get-ExternalData {
     $notes = @()
     $envFile = Join-Path $Root "server\.env"
     if (-not (Test-Path -LiteralPath $envFile)) { return $notes }
-    $vals = @{}
-    foreach ($line in (Get-Content -LiteralPath $envFile -ErrorAction SilentlyContinue)) {
-        if ($line -match '^\s*(EEM_[A-Z_]+)\s*=\s*(.*?)\s*$') { $vals[$Matches[1]] = $Matches[2].Trim('"') }
-    }
+    $vals = Read-EnvFile $envFile
     foreach ($k in @("EEM_RECORDING_DIR", "EEM_SCREENSHOT_DIR", "EEM_PACKAGE_OUTPUT_DIR")) {
         $p = $vals[$k]
         if ($p -and [IO.Path]::IsPathRooted($p) -and -not (Test-UnderDir $p $Root)) {
@@ -472,7 +480,26 @@ if (-not $NoPackaging) {
                 # 開子行程執行：build.ps1 自己設 ErrorActionPreference='Stop'，
                 # 而 dotnet 的 stderr 在那個設定下會變成致命錯誤，會把整支安裝
                 # 腳本一起帶走。隔離之後最壞只是這一步失敗。
-                & powershell -NoProfile -ExecutionPolicy Bypass -File $agentBuild
+                # -SkipWixCheck：WiX 由本腳本稍後的「MSI 建置工具」步驟安裝在
+                # tools\wix（不在 PATH），build.ps1 在這時檢查只會誤報找不到。
+                #
+                # 簽章設定通常寫在 .env（伺服器簽 MSI 用的那份），但 build.ps1
+                # 只看環境變數。升級時 .env 已存在，把簽章那幾項借給子行程，
+                # 讓 exe 也簽得到；跑完還原，密碼不留在本行程。
+                # 已經設成環境變數的優先，不覆寫。
+                $envVals = Read-EnvFile (Join-Path $AppDir ".env")
+                $borrowed = @()
+                foreach ($k in @("EEM_SIGNING_PFX", "EEM_SIGNING_PASSWORD", "EEM_SIGNING_TIMESTAMP_URL")) {
+                    if ($envVals[$k] -and -not [Environment]::GetEnvironmentVariable($k)) {
+                        [Environment]::SetEnvironmentVariable($k, $envVals[$k])
+                        $borrowed += $k
+                    }
+                }
+                try {
+                    & powershell -NoProfile -ExecutionPolicy Bypass -File $agentBuild -SkipWixCheck
+                } finally {
+                    foreach ($k in $borrowed) { [Environment]::SetEnvironmentVariable($k, $null) }
+                }
                 if ($LASTEXITCODE -eq 0 -and (Test-Path $agentExe)) {
                     $mb = [math]::Round((Get-Item $agentExe).Length / 1MB, 1)
                     Ok "Agent 已重建（$mb MB）"
@@ -799,6 +826,25 @@ function Test-Ffmpeg {
     }
 }
 
+function Expand-FfmpegZip {
+    # 從 zip 只解出 ffmpeg.exe 到 $WorkDir，回傳它的路徑。官方建置版放在 bin\ 底下，
+    # repo 內附的 server\tools\ffmpeg\ffmpeg.zip 則放在根目錄，兩種都認。
+    param([string]$ZipPath, [string]$WorkDir)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entry = $zip.Entries |
+                 Where-Object { $_.FullName -match '(^|/)ffmpeg\.exe$' } |
+                 Select-Object -First 1
+        if (-not $entry) { throw "壓縮檔裡沒有 ffmpeg.exe" }
+        $exe = Join-Path $WorkDir "ffmpeg.exe"
+        [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $exe, $true)
+        return $exe
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 function Get-FfmpegDownload {
     # 下載、核對 SHA-256、只解出 bin\ffmpeg.exe。回傳它的路徑，全部來源都失敗回傳 $null。
     # 兩個來源都是 FFmpeg 官網列出的 Windows 建置版，皆為含 libx264 的靜態建置。
@@ -838,18 +884,7 @@ function Get-FfmpegDownload {
             $actual = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower()
             if ($actual -ne $expected) { throw "SHA-256 不符（預期 $expected，實際 $actual）" }
 
-            $zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
-            try {
-                $entry = $zip.Entries |
-                         Where-Object { $_.FullName -match '(^|/)bin/ffmpeg\.exe$' } |
-                         Select-Object -First 1
-                if (-not $entry) { throw "壓縮檔裡沒有 bin/ffmpeg.exe" }
-                $exe = Join-Path $WorkDir "ffmpeg.exe"
-                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $exe, $true)
-            } finally {
-                $zip.Dispose()
-            }
-            return $exe
+            return Expand-FfmpegZip $zipPath $WorkDir
         } catch {
             Warn "$($src.Name) 下載失敗：$($_.Exception.Message)"
         } finally {
@@ -897,6 +932,27 @@ if ($NoRecording) {
                 break
             }
             Warn "$c 複製出來無法單獨執行（可能是需要 DLL 的 shared 建置版），略過"
+        }
+
+        # 再來是 repo 內附的 ffmpeg.zip（來源與授權見 server\tools\ffmpeg\SOURCE.md），
+        # 不必連網。exe 本身超過 GitHub 單檔 100 MB 上限，所以 repo 裡放的是壓縮檔。
+        $bundled = Join-Path $srcServer "tools\ffmpeg\ffmpeg.zip"
+        if (-not $ffReady -and -not $FfmpegPath -and (Test-Path -LiteralPath $bundled)) {
+            $ffWork = Join-Path $env:TEMP ("eem-ffmpeg-" + [guid]::NewGuid().ToString("N"))
+            New-Item -ItemType Directory -Force -Path $ffWork | Out-Null
+            try {
+                $unpacked = Expand-FfmpegZip $bundled $ffWork
+                if (Test-Ffmpeg $unpacked) {
+                    Copy-Item -LiteralPath $unpacked -Destination $ffExe -Force
+                    $ffReady = Test-Ffmpeg $ffExe
+                }
+            } catch {
+                Warn "內附的 ffmpeg.zip 解壓失敗：$($_.Exception.Message)"
+            } finally {
+                Remove-Item -LiteralPath $ffWork -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            if ($ffReady) { Ok "使用 repo 內附的 FFmpeg（$ffExe）" }
+            else { Warn "內附的 ffmpeg.zip 無法使用，改為下載" }
         }
 
         if (-not $ffReady -and -not $FfmpegPath) {

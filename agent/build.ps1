@@ -10,12 +10,17 @@
 
     Output: agent/publish/EndpointAgent.exe (self-contained, single file).
 
+.PARAMETER SkipWixCheck
+    Skip the WiX presence check. server/install.ps1 passes this because it
+    builds the agent first and provisions its own WiX (outside PATH) afterwards.
+
 .EXAMPLE
     ./build.ps1
 #>
 [CmdletBinding()]
 param(
-    [string]$Configuration = "Release"
+    [string]$Configuration = "Release",
+    [switch]$SkipWixCheck
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,16 +56,20 @@ if ($env:EEM_SIGNING_PFX -and $env:EEM_SIGNING_PASSWORD) {
     Write-Warning "EEM_SIGNING_PFX not set; agent binary is unsigned. See signing/README.md."
 }
 
-# WiX is what turns that binary into an installable package.
-$wix = Get-Command wix -ErrorAction SilentlyContinue
-if (-not $wix) {
+# WiX is what turns that binary into an installable package. The server uses
+# EEM_WIX_COMMAND when set, so honour it here too before falling back to PATH.
+$wix = if ($env:EEM_WIX_COMMAND) { Get-Command $env:EEM_WIX_COMMAND -ErrorAction SilentlyContinue }
+       else { Get-Command wix -ErrorAction SilentlyContinue }
+if ($SkipWixCheck) {
+    # The caller handles WiX itself.
+} elseif (-not $wix) {
     Write-Warning "WiX not found. The server cannot build packages until you run:"
     Write-Warning "  dotnet tool install --global wix --version 5.*"
     Write-Warning "  wix extension add -g WixToolset.Util.wixext/5.0.2"
     Write-Warning "  wix extension add -g WixToolset.Firewall.wixext/5.0.2"
     Write-Warning "Use WiX 5, not 6/7 -- those require accepting a paid maintenance-fee EULA."
 } else {
-    Write-Host "OK  wix $((& wix --version) -join '')" -ForegroundColor Green
+    Write-Host "OK  wix $((& $wix.Source --version) -join '')" -ForegroundColor Green
 }
 
 Write-Host ""

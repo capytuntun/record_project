@@ -59,7 +59,7 @@ powershell -ExecutionPolicy Bypass -File server\install.ps1
 | 權限 | 系統管理員（UAC） |
 | Python | **3.11 以上**；沒有的話腳本會試著用 winget 裝 |
 | .NET SDK | 只有「要在主控台建 MSI」才需要（WiX 與 Agent 執行檔都靠它）；沒有的話腳本會用 winget 裝 |
-| FFmpeg | 只有「螢幕錄影」需要；腳本會自動下載到 `C:\EEM\tools\ffmpeg\ffmpeg.exe`（核對 SHA-256）。離線環境用 `-FfmpegPath <ffmpeg.exe>` 指定 |
+| FFmpeg | 只有「螢幕錄影」需要；repo 已內附 `server\tools\ffmpeg\ffmpeg.zip`（來源與授權見同目錄 `SOURCE.md`），腳本會解壓到 `C:\EEM\tools\ffmpeg\ffmpeg.exe`，不必下載。缺檔時才自動從 gyan.dev 下載（核對 SHA-256），或用 `-FfmpegPath <ffmpeg.exe>` 指定 |
 
 安裝完的樣子：
 

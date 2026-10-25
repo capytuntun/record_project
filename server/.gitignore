@@ -13,5 +13,10 @@ instance/packages/
 
 # Recording storage (encrypted screen recordings — sensitive).
 instance/recordings/
-# Bundled FFmpeg binary (~98MB) — fetch per environment.
-tools/ffmpeg/
+# Bundled FFmpeg is committed (zipped: the bare exe is over GitHub's 100MB
+# limit) so install.ps1 needn't download it. See tools/ffmpeg/SOURCE.md.
+# Anything else dropped there -- including an extracted ffmpeg.exe -- stays out.
+tools/ffmpeg/*
+!tools/ffmpeg/ffmpeg.zip
+!tools/ffmpeg/LICENSE.txt
+!tools/ffmpeg/SOURCE.md

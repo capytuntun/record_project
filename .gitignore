@@ -26,7 +26,12 @@
 **/obj/
 **/publish/
 **/node_modules/
-**/tools/ffmpeg/
+# The Windows FFmpeg build in server/tools/ffmpeg/ IS committed (owner's
+# choice: installs shouldn't depend on gyan.dev). Anything else there stays out.
+**/tools/ffmpeg/*
+!/server/tools/ffmpeg/ffmpeg.zip
+!/server/tools/ffmpeg/LICENSE.txt
+!/server/tools/ffmpeg/SOURCE.md
 *.msi
 *.wixpdb
 
