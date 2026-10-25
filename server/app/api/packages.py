@@ -30,6 +30,7 @@ from ..security.authn import require_permission
 from ..security.passwords import generate_secret, sha256_hex
 from ..security.rbac import PACKAGES_CREATE, PACKAGES_DOWNLOAD, PACKAGES_READ
 from ..services import agent_build, audit, packaging
+from ..services.signing import SigningSettings
 from .enrollment import MAX_USES, _read_validity
 from .validation import get_int, get_str, json_body, paginated, pagination
 
@@ -109,7 +110,10 @@ def start_agent_build():
 
     publish_dir = Path(current_app.config["AGENT_BINARY_PATH"]).parent
     if not agent_build.builder.start(
-        dotnet=dotnet, agent_root=agent_root, publish_dir=publish_dir
+        dotnet=dotnet,
+        agent_root=agent_root,
+        publish_dir=publish_dir,
+        signing=SigningSettings.from_config(current_app.config),
     ):
         raise ConflictError("已經有一個重建在進行中。")
 

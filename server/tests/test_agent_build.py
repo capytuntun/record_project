@@ -18,6 +18,7 @@ import pytest
 from app.models import AuditLog, db
 from app.models.audit import ACCESS_DENIED
 from app.services import agent_build
+from app.services.signing import SigningSettings
 
 from .conftest import auth_header
 
@@ -301,3 +302,165 @@ def test_only_one_build_runs_at_a_time(monkeypatch, tmp_path):
         if not agent_build.builder.is_running():
             break
         time.sleep(0.01)
+
+
+# --- signing the rebuilt exe ---------------------------------------------------
+
+
+def _wait_for_build() -> None:
+    for _ in range(400):
+        if not agent_build.builder.is_running():
+            break
+        time.sleep(0.01)
+
+
+def _signing(tmp_path: Path, *, pfx_exists: bool = True) -> SigningSettings:
+    pfx = tmp_path / "signing.pfx"
+    if pfx_exists:
+        pfx.write_bytes(b"not really a pfx")
+    return SigningSettings(
+        pfx_path=pfx, password="pfx-pw-s3cret", script=r"C:\agent\signing\Sign-File.ps1",
+        timestamp_url="http://timestamp.example",
+    )
+
+
+def test_a_configured_certificate_signs_the_rebuilt_exe(monkeypatch, tmp_path):
+    """Same as agent/build.ps1: without this, a console rebuild replaced a
+    signed exe with an unsigned one."""
+    root = _agent_tree(tmp_path)
+    publish = root / "publish"
+    calls: list[tuple[list[str], dict]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = "Signed"
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((list(command), kwargs))
+        return _Result()
+
+    monkeypatch.setattr(agent_build.subprocess, "run", fake_run)
+
+    agent_build.builder.start(dotnet="dotnet.exe", agent_root=root, publish_dir=publish,
+                              signing=_signing(tmp_path))
+    _wait_for_build()
+
+    assert len(calls) == 3, "publish, custom action, then sign"
+    sign_cmd, sign_kwargs = calls[2]
+    assert sign_cmd[0] == "powershell"
+    assert sign_cmd[sign_cmd.index("-File") + 1] == r"C:\agent\signing\Sign-File.ps1"
+    assert str(publish / "EndpointAgent.exe") in sign_cmd
+    assert sign_cmd[sign_cmd.index("-CertPath") + 1] == str(tmp_path / "signing.pfx")
+    assert sign_cmd[sign_cmd.index("-TimestampUrl") + 1] == "http://timestamp.example"
+    # The password goes through the environment, never the process list.
+    assert all("pfx-pw-s3cret" not in part for command, _ in calls for part in command)
+    assert sign_kwargs["env"]["EEM_SIGNING_PASSWORD"] == "pfx-pw-s3cret"
+    assert sign_kwargs["shell"] is False
+
+    state = agent_build.builder.status()
+    assert state["status"] == agent_build.STATUS_SUCCEEDED
+    assert "已簽章" in state["message"]
+
+
+def test_a_failed_signature_fails_the_rebuild(monkeypatch, tmp_path):
+    """An exe that was meant to be signed must not be reported as a good build."""
+    root = _agent_tree(tmp_path)
+
+    class _Result:
+        stdout = ""
+        stderr = ""
+
+        def __init__(self, returncode):
+            self.returncode = returncode
+
+    def fake_run(command, **kwargs):
+        return _Result(1 if command[0] == "powershell" else 0)
+
+    monkeypatch.setattr(agent_build.subprocess, "run", fake_run)
+
+    agent_build.builder.start(dotnet="dotnet.exe", agent_root=root, publish_dir=root / "publish",
+                              signing=_signing(tmp_path))
+    _wait_for_build()
+
+    state = agent_build.builder.status()
+    assert state["status"] == agent_build.STATUS_FAILED
+    assert "簽章失敗" in state["message"]
+
+
+def test_a_missing_certificate_fails_without_running_the_signer(monkeypatch, tmp_path):
+    root = _agent_tree(tmp_path)
+    commands: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        commands.append(list(command))
+        return _Result()
+
+    monkeypatch.setattr(agent_build.subprocess, "run", fake_run)
+
+    agent_build.builder.start(dotnet="dotnet.exe", agent_root=root, publish_dir=root / "publish",
+                              signing=_signing(tmp_path, pfx_exists=False))
+    _wait_for_build()
+
+    assert [c[0] for c in commands] == ["dotnet.exe", "dotnet.exe"]
+    state = agent_build.builder.status()
+    assert state["status"] == agent_build.STATUS_FAILED
+    assert "憑證不存在" in state["message"]
+
+
+def test_without_a_certificate_the_success_message_does_not_claim_signed(monkeypatch, tmp_path):
+    root = _agent_tree(tmp_path)
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(agent_build.subprocess, "run", lambda command, **kw: _Result())
+
+    agent_build.builder.start(dotnet="dotnet.exe", agent_root=root, publish_dir=root / "publish")
+    _wait_for_build()
+
+    state = agent_build.builder.status()
+    assert state["status"] == agent_build.STATUS_SUCCEEDED
+    assert "簽章" not in state["message"]
+
+
+@pytest.mark.parametrize("configured", [True, False])
+def test_the_console_rebuild_uses_the_server_certificate(
+    client, super_admin_token, app, tmp_path, monkeypatch, configured
+):
+    root = _agent_tree(tmp_path)
+    app.config["AGENT_ROOT_PATH"] = str(root)
+    app.config["AGENT_BINARY_PATH"] = str(root / "publish" / "EndpointAgent.exe")
+    app.config["SIGNING_ENABLED"] = configured
+    app.config["SIGNING_PFX_PATH"] = str(tmp_path / "server.pfx") if configured else None
+    app.config["SIGNING_PASSWORD"] = "server-pw" if configured else None
+    app.config["SIGNING_SCRIPT"] = r"C:\agent\signing\Sign-File.ps1"
+    app.config["SIGNING_TIMESTAMP_URL"] = None
+
+    started: list[dict] = []
+    monkeypatch.setattr(agent_build, "find_dotnet", lambda configured="": "dotnet.exe")
+    monkeypatch.setattr(agent_build.builder, "start",
+                        lambda **kwargs: started.append(kwargs) or True)
+
+    response = client.post("/api/packages/agent-build", headers=auth_header(super_admin_token))
+    assert response.status_code == 202
+
+    signing = started[0]["signing"]
+    if configured:
+        assert signing.pfx_path == tmp_path / "server.pfx"
+        assert signing.password == "server-pw"
+        assert signing.timestamp_url is None
+    else:
+        assert signing is None
+
+
+def test_signing_settings_never_show_the_password():
+    settings = SigningSettings(pfx_path=Path("C:/x.pfx"), password="hunter2", script="s.ps1")
+    assert "hunter2" not in repr(settings)

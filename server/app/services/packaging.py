@@ -24,6 +24,8 @@ from pathlib import Path
 
 from flask import current_app
 
+from .signing import SigningSettings, sign_file
+
 logger = logging.getLogger(__name__)
 
 # Must match EndpointAgent's AdminPassword.Verify.
@@ -336,33 +338,15 @@ def _sign_if_configured(msi_path: Path, package_id: str) -> bool:
     PackagingError if signing IS configured but fails -- a package that was
     meant to be signed must not go out unsigned silently.
     """
-    config = current_app.config
-    if not config.get("SIGNING_ENABLED"):
+    settings = SigningSettings.from_config(current_app.config)
+    if settings is None:
         return False
 
-    pfx = Path(config["SIGNING_PFX_PATH"])
-    if not pfx.is_file():
-        raise PackagingError(f"設定的簽章憑證不存在：{pfx}")
-
-    command = [
-        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-        "-File", config["SIGNING_SCRIPT"],
-        "-File", str(msi_path),
-        "-CertPath", str(pfx),
-    ]
-    if config.get("SIGNING_TIMESTAMP_URL"):
-        command += ["-TimestampUrl", config["SIGNING_TIMESTAMP_URL"]]
-
-    # The password crosses to PowerShell through the environment, not argv, so
-    # it never appears in the process list.
-    env = dict(os.environ)
-    env["EEM_SIGNING_PASSWORD"] = config["SIGNING_PASSWORD"]
+    if not settings.pfx_path.is_file():
+        raise PackagingError(f"設定的簽章憑證不存在：{settings.pfx_path}")
 
     try:
-        result = subprocess.run(
-            command, capture_output=True, text=True,
-            timeout=BUILD_TIMEOUT_SECONDS, env=env, shell=False,
-        )
+        result = sign_file(msi_path, settings, timeout=BUILD_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
         raise PackagingError("簽章逾時。") from exc
 

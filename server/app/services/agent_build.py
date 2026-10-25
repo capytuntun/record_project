@@ -27,6 +27,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .signing import SigningSettings, sign_file
+
 logger = logging.getLogger(__name__)
 
 # A self-contained single-file publish is slow. Generous, but bounded: a build
@@ -147,8 +149,19 @@ class AgentBuilder:
                 "output": None,
             }
 
-    def start(self, *, dotnet: str, agent_root: Path, publish_dir: Path) -> bool:
-        """Begin a rebuild. Returns False when one is already running."""
+    def start(
+        self,
+        *,
+        dotnet: str,
+        agent_root: Path,
+        publish_dir: Path,
+        signing: SigningSettings | None = None,
+    ) -> bool:
+        """Begin a rebuild. Returns False when one is already running.
+
+        ``signing`` is read from config by the caller: the build runs on its own
+        thread, outside the app context.
+        """
         with self._lock:
             if self._state["status"] == STATUS_RUNNING:
                 return False
@@ -161,7 +174,12 @@ class AgentBuilder:
             }
             self._thread = threading.Thread(
                 target=self._run,
-                kwargs={"dotnet": dotnet, "agent_root": agent_root, "publish_dir": publish_dir},
+                kwargs={
+                    "dotnet": dotnet,
+                    "agent_root": agent_root,
+                    "publish_dir": publish_dir,
+                    "signing": signing,
+                },
                 daemon=True,
                 name="agent-build",
             )
@@ -177,7 +195,14 @@ class AgentBuilder:
             self._state["output"] = (output or "")[-4000:] or None
             self._state["finishedAt"] = datetime.now(tz=timezone.utc).isoformat()
 
-    def _run(self, *, dotnet: str, agent_root: Path, publish_dir: Path) -> None:
+    def _run(
+        self,
+        *,
+        dotnet: str,
+        agent_root: Path,
+        publish_dir: Path,
+        signing: SigningSettings | None = None,
+    ) -> None:
         project = agent_root / "src" / "EndpointAgent" / "EndpointAgent.csproj"
         ca_project = (
             agent_root / "src" / "EndpointAgent.CustomActions"
@@ -233,9 +258,40 @@ class AgentBuilder:
                          "\n".join(collected))
             return
 
+        # Sign the exe as agent/build.ps1 does, so AppLocker/AV see a signed
+        # executable even before the MSI around it is trusted. A binary that was
+        # meant to be signed must not be reported as a good build unsigned.
+        signed = False
+        if signing is not None:
+            failure = self._sign(binary, signing, collected)
+            if failure:
+                logger.error("agent rebuild: signing failed: %s", failure)
+                self._finish(STATUS_FAILED, failure, "\n".join(collected))
+                return
+            signed = True
+
         size_mb = round(binary.stat().st_size / (1024 * 1024), 1)
-        logger.info("agent rebuild succeeded: %s (%s MB)", binary, size_mb)
-        self._finish(STATUS_SUCCEEDED, f"已重建 Agent（{size_mb} MB）。", "\n".join(collected))
+        logger.info("agent rebuild succeeded: %s (%s MB, signed=%s)", binary, size_mb, signed)
+        note = "，已簽章" if signed else ""
+        self._finish(STATUS_SUCCEEDED, f"已重建 Agent（{size_mb} MB{note}）。",
+                     "\n".join(collected))
+
+    @staticmethod
+    def _sign(binary: Path, signing: SigningSettings, collected: list[str]) -> str | None:
+        """Sign the rebuilt exe. Returns an admin-facing error, or None on success."""
+        if not signing.pfx_path.is_file():
+            return f"已重建 Agent，但設定的簽章憑證不存在：{signing.pfx_path}"
+        logger.info("agent rebuild: sign")
+        try:
+            result = sign_file(binary, signing)
+        except subprocess.TimeoutExpired:
+            return "已重建 Agent，但 exe 簽章逾時。"
+        except OSError as exc:
+            return f"已重建 Agent，但無法執行簽章程式：{exc}"
+        collected.append(f"$ sign\n{result.stdout}\n{result.stderr}")
+        if result.returncode != 0:
+            return f"已重建 Agent，但 exe 簽章失敗（代碼 {result.returncode}）。"
+        return None
 
 
 builder = AgentBuilder()
