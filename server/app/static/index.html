@@ -491,34 +491,53 @@
         </table></div>
       </section>
 
-      <section class="panel" id="al-channels-panel" hidden>
-        <div class="panel-head">
-          <div>
-            <strong>通知通道</strong>
-            <p class="sub">告警達到通道的最低嚴重性時，會以 Email 或 Webhook（Slack／Teams／LINE 相容）推送。</p>
-          </div>
-        </div>
-        <form id="al-channel-form" class="toolbar" style="flex-wrap:wrap;gap:.5rem;padding:0 1.1rem 1rem">
-          <input id="ch-name" placeholder="名稱" required>
-          <select id="ch-type">
-            <option value="webhook">Webhook</option>
-            <option value="email">Email</option>
-          </select>
-          <input id="ch-target" placeholder="https://… 或 someone@example.com" required
-                 style="min-width:18rem;flex:1">
-          <select id="ch-sev">
-            <option value="warning">warning 以上</option>
-            <option value="info">info 以上（全部）</option>
-            <option value="critical">只有 critical</option>
-          </select>
-          <button type="submit">新增通道</button>
-        </form>
-        <div class="table-wrap"><table id="channels-table">
-          <thead><tr><th>名稱</th><th>類型</th><th>目標</th><th>最低嚴重性</th>
-            <th>啟用</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table></div>
-      </section>
+      <div id="al-channels-panel" hidden>
+        <h3 class="section-head">通知通道</h3>
+        <p class="sub">告警發生時，自動推送到 Email 或聊天群組（Slack、Teams、LINE 等支援 Webhook 的服務）。</p>
+
+        <section class="panel">
+          <div class="table-wrap"><table id="channels-table">
+            <thead><tr><th>名稱</th><th>送往</th><th>通知哪些告警</th><th>狀態</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+        </section>
+
+        <details class="panel form-panel" id="ch-form-panel">
+          <summary>新增通知通道</summary>
+          <form id="al-channel-form">
+            <div class="form-grid ch-grid">
+              <div>
+                <label for="ch-name">名稱</label>
+                <input id="ch-name" required>
+              </div>
+              <div>
+                <label for="ch-type">送往</label>
+                <select id="ch-type">
+                  <option value="webhook">聊天群組（Webhook）</option>
+                  <option value="email">Email</option>
+                </select>
+              </div>
+              <div class="ch-target">
+                <label for="ch-target" id="ch-target-label">Webhook 網址</label>
+                <input id="ch-target" placeholder="https://hooks.slack.com/services/…" required
+                       autocomplete="off" spellcheck="false">
+              </div>
+              <div>
+                <label for="ch-sev">通知哪些告警</label>
+                <select id="ch-sev">
+                  <option value="warning">警告與嚴重（建議）</option>
+                  <option value="critical">只有嚴重</option>
+                  <option value="info">全部，含資訊</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" id="ch-save" class="primary">新增通道</button>
+              <span class="hint" id="ch-hint">Webhook 網址由聊天服務產生（例如 Slack 的 Incoming Webhook），新增後可按「測試」確認收得到。</span>
+            </div>
+          </form>
+        </details>
+      </div>
     </div>
 
     <!-- 儲存位置（錄影/截圖）-->

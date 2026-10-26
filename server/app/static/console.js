@@ -64,12 +64,17 @@ const STATUS = {
   EXPIRED:      { text: "已過期", tone: "neutral",  glyph: "ring" },
   EXHAUSTED:    { text: "次數用完", tone: "neutral", glyph: "ring" },
   REVOKED:      { text: "已撤銷", tone: "critical", glyph: "slash" },
+  BUILD_FAILED: { text: "建置失敗", tone: "critical", glyph: "slash" },
+  // 通知通道：暫停推送不是異常，不用紅色。
+  CHANNEL_ON:   { text: "啟用中", tone: "good",    glyph: "dot" },
+  CHANNEL_OFF:  { text: "已暫停", tone: "neutral", glyph: "ring" },
 };
 
 const GLYPH_PATHS = {
   dot:      [["circle", { cx: 8, cy: 8, r: 4, fill: "currentColor" }]],
   ring:     [["circle", { cx: 8, cy: 8, r: 4, fill: "none", stroke: "currentColor", "stroke-width": 2 }]],
   triangle: [["path", { d: "M8 2.8 14.6 13.6H1.4z", fill: "currentColor" }]],
+  diamond:  [["path", { d: "M8 1.8 14.2 8 8 14.2 1.8 8z", fill: "currentColor" }]],
   slash:    [
     ["circle", { cx: 8, cy: 8, r: 5, fill: "none", stroke: "currentColor", "stroke-width": 2 }],
     ["path", { d: "M4.6 11.4 11.4 4.6", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round" }],
@@ -199,6 +204,14 @@ function badge(code) {
 
 function pill(text, strong) {
   return el("span", text, "pill" + (strong ? " strong" : ""));
+}
+
+/** Grey out a row button, with the reason on hover. Rows keep the same buttons
+ *  in the same places, so one that does not apply never shifts the rest. */
+function unavailable(button, why) {
+  button.disabled = true;
+  button.title = why;
+  return button;
 }
 
 function row(cells) {
@@ -438,8 +451,27 @@ async function loadUninstallAlerts() {
   }
   if (!data.items.length) { box.hidden = true; return; }
 
+  // 「關閉」只是把這塊收起來，紀錄本身不動（稽核紀錄是唯讀的）。記住關閉時最新
+  // 一筆的時間：之後有更新的嘗試出現，它會自己再跳出來，不會被永久關掉。
+  const DISMISS_KEY = "eem.uninstallAlert.dismissedThrough";
+  const newest = data.items.reduce((m, i) => (i.timestamp > m ? i.timestamp : m), "");
+  let dismissedThrough = null;
+  try { dismissedThrough = localStorage.getItem(DISMISS_KEY); } catch {}
+  if (dismissedThrough && newest <= dismissedThrough) { box.hidden = true; return; }
+
   box.replaceChildren();
-  box.appendChild(el("strong", `有人嘗試移除端點上的 Agent（${data.total} 次）`));
+  const head = el("div", null, "alert-head");
+  head.appendChild(el("strong", `有人嘗試移除端點上的 Agent（${data.total} 次）`));
+  const close = el("button", "✕", "alert-close");
+  close.type = "button";
+  close.title = "關閉這則提醒（紀錄仍在稽核紀錄與告警中心）";
+  close.setAttribute("aria-label", "關閉");
+  close.addEventListener("click", () => {
+    try { localStorage.setItem(DISMISS_KEY, newest); } catch {}
+    box.hidden = true;
+  });
+  head.appendChild(close);
+  box.appendChild(head);
   data.items.forEach((item) => {
     const meta = item.metadata || {};      // 伺服器已經解析好，這裡是物件不是字串
     const who = meta.localUser ? `使用者 ${meta.localUser}` : "未知使用者";
@@ -500,9 +532,15 @@ async function loadEndpoints() {
   fillTable("ep-table", shown.map((e) => {
     const actions = el("span", null, "row-actions");
 
-    if (can("endpoints:screen:view") && e.state !== "DISABLED") {
+    // Every row gets the same buttons in the same order -- unavailable ones are
+    // disabled, not left out -- so the columns line up down the table.
+    if (can("endpoints:screen:view")) {
       const view = el("button", "檢視畫面", "ghost");
-      view.addEventListener("click", () => guard(() => openScreenViewer(e)));
+      if (e.state === "DISABLED") {
+        unavailable(view, "端點已停用，無法檢視畫面");
+      } else {
+        view.addEventListener("click", () => guard(() => openScreenViewer(e)));
+      }
       actions.appendChild(view);
     }
     if (can("endpoints:screen:view")) {
@@ -1735,34 +1773,47 @@ async function loadUsers() {
   fillTable("user-table", data.items.map((u) => {
     const actions = el("span", null, "row-actions");
 
+    // What the viewer may do decides which buttons exist (the same for every row);
+    // what this row allows only greys one out, so the columns stay aligned.
+
     // Only a regular ADMIN has a scope to set; SUPER_ADMIN sees everything.
-    if (can("groups:manage") && u.role === "ADMIN" && !u.deletedAt) {
+    if (can("groups:manage")) {
       const scope = el("button", "可見範圍", "ghost");
-      scope.addEventListener("click", () => guard(() => openScopeModal(u)));
+      if (u.deletedAt) unavailable(scope, "帳號已刪除");
+      else if (u.role !== "ADMIN") unavailable(scope, "最高管理員可看到所有端點");
+      else scope.addEventListener("click", () => guard(() => openScopeModal(u)));
       actions.appendChild(scope);
     }
     // Granting hidden features is SUPER_ADMIN-only (never delegated).
-    if (state.user.role === "SUPER_ADMIN" && u.role === "ADMIN" && !u.deletedAt) {
+    if (state.user.role === "SUPER_ADMIN") {
       const feats = el("button", "功能授權", "ghost");
-      feats.addEventListener("click", () => guard(() => openFeaturesModal(u)));
+      if (u.deletedAt) unavailable(feats, "帳號已刪除");
+      else if (u.role !== "ADMIN") unavailable(feats, "最高管理員本來就有全部功能");
+      else feats.addEventListener("click", () => guard(() => openFeaturesModal(u)));
       actions.appendChild(feats);
     }
     // 重設別人的密碼僅限最高管理員（伺服器強制）。自己的密碼走側欄的「修改密碼」，
     // 那條路徑需要目前密碼，不能從這裡繞過。
-    if (state.user.role === "SUPER_ADMIN" && u.id !== state.user.id && !u.deletedAt) {
+    if (state.user.role === "SUPER_ADMIN") {
       const pw = el("button", "重設密碼", "ghost");
-      pw.addEventListener("click", () => openPasswordModal(u, false));
+      if (u.deletedAt) unavailable(pw, "帳號已刪除");
+      else if (u.id === state.user.id) unavailable(pw, "自己的密碼請用左下角的「修改密碼」");
+      else pw.addEventListener("click", () => openPasswordModal(u, false));
       actions.appendChild(pw);
     }
-    // 伺服器本來就會拒絕，這裡隱藏只是避免使用者按了才吃 403。
-    if (can("users:delete") && u.id !== state.user.id) {
+    // 伺服器本來就會拒絕，這裡停用只是避免使用者按了才吃 403。
+    if (can("users:delete")) {
       const remove = el("button", "刪除", "ghost danger");
-      remove.addEventListener("click", () => guard(async () => {
-        if (!confirm(`確定刪除「${u.username}」？\n\n採軟刪除，稽核紀錄仍可追溯此帳號的操作。`)) return;
-        await request("DELETE", `/api/users/${u.id}`);
-        flash(`已刪除 ${u.username}。`);
-        loadUsers();
-      }));
+      if (u.id === state.user.id) {
+        unavailable(remove, "不能刪除自己的帳號");
+      } else {
+        remove.addEventListener("click", () => guard(async () => {
+          if (!confirm(`確定刪除「${u.username}」？\n\n採軟刪除，稽核紀錄仍可追溯此帳號的操作。`)) return;
+          await request("DELETE", `/api/users/${u.id}`);
+          flash(`已刪除 ${u.username}。`);
+          loadUsers();
+        }));
+      }
       actions.appendChild(remove);
     }
     return row([
@@ -2467,15 +2518,12 @@ async function loadPackages() {
   // 先確認伺服器具備建置工具，否則按下去只會拿到一個看不懂的錯誤。
   const tools = await request("GET", "/api/packages/toolchain");
   const warning = $("toolchain-warning");
+  // Only a real blocker is shown here. An unsigned build is a known state, not
+  // an error: the package list already has a 簽章 column, and check-config
+  // reports it at install time.
   if (!tools.ready) {
     warning.textContent = "此伺服器目前無法建置安裝包：" + tools.problems.join("；");
     warning.classList.add("bad");
-    warning.hidden = false;
-  } else if (!tools.signingEnabled) {
-    // Builds work, but the MSI will be unsigned -- worth flagging, not blocking.
-    warning.textContent =
-      "注意：目前未設定程式碼簽章，產生的 MSI 未簽章，於企業環境可能被 SmartScreen／AppLocker 阻擋。";
-    warning.classList.remove("bad");
     warning.hidden = false;
   } else {
     warning.hidden = true;
@@ -2484,20 +2532,18 @@ async function loadPackages() {
 
   // 沒帶憑證的安裝包，端點裝完會連不回來（Agent 不繞過 TLS 驗證），而且
   // 症狀是「一直離線」而非明確錯誤 —— 所以在按下產生之前就講清楚。
+  // 憑證有夾帶是正常狀態，不另外提示。
   const certNote = $("pk-cert-note");
   if (tools.certificateEmbedded) {
-    certNote.textContent =
-      "安裝包會夾帶此伺服器的 TLS 憑證，安裝時自動寫入端點的「受信任的根憑證授權」"
-      + "（解除安裝時移除）。端點不需要另外設定就能連回來。";
-    certNote.classList.remove("bad");
+    certNote.hidden = true;
   } else {
     certNote.textContent =
       "注意：伺服器未設定要夾帶的憑證（EEM_PACKAGE_CA_CERT／EEM_TLS_CERT），"
       + "安裝包不會帶憑證。若伺服器用的是自簽憑證，端點裝完會因為不信任憑證而一直顯示離線 —— "
       + "需要另外把憑證匯入端點，見 docs/deployment-windows.md §7。";
     certNote.classList.add("bad");
+    certNote.hidden = false;
   }
-  certNote.hidden = false;
 
   if (!$("pk-server").value) $("pk-server").value = window.location.origin;
 
@@ -2507,27 +2553,36 @@ async function loadPackages() {
   fillTable("package-table", data.items.map((p) => {
     const actions = el("span", null, "row-actions");
 
-    if (p.status === "READY" && can("packages:download")) {
+    // Same buttons on every row; a package's state only greys one out.
+    if (can("packages:download")) {
       const download = el("button", "下載", "ghost");
-      download.addEventListener("click", () => guard(() => downloadPackage(p)));
+      if (p.status === "READY") {
+        download.addEventListener("click", () => guard(() => downloadPackage(p)));
+      } else {
+        unavailable(download, p.status === "FAILED" ? "建置失敗，沒有檔案可下載" : "檔案已刪除或過期");
+      }
       actions.appendChild(download);
     }
-    if (can("packages:create") && p.status !== "DELETED") {
+    if (can("packages:create")) {
       const remove = el("button", "刪除", "ghost danger");
-      remove.addEventListener("click", () => guard(async () => {
-        if (!confirm(
-          `確定刪除「${p.label}」？\n\n` +
-          `檔案會從伺服器移除，已經下載出去的副本也將無法再用於安裝。`
-        )) return;
-        await request("DELETE", `/api/packages/${p.id}`);
-        flash("安裝包已刪除。");
-        loadPackages();
-      }));
+      if (p.status === "DELETED") {
+        unavailable(remove, "已刪除");
+      } else {
+        remove.addEventListener("click", () => guard(async () => {
+          if (!confirm(
+            `確定刪除「${p.label}」？\n\n` +
+            `檔案會從伺服器移除，已經下載出去的副本也將無法再用於安裝。`
+          )) return;
+          await request("DELETE", `/api/packages/${p.id}`);
+          flash("安裝包已刪除。");
+          loadPackages();
+        }));
+      }
       actions.appendChild(remove);
     }
 
     const stateCode = p.status === "READY" ? "VALID"
-      : p.status === "FAILED" ? "REVOKED" : "EXPIRED";
+      : p.status === "FAILED" ? "BUILD_FAILED" : "EXPIRED";
 
     return row([
       p.label,
@@ -2671,11 +2726,36 @@ $("create-package-form").addEventListener("submit", (event) => {
 $("au-refresh").addEventListener("click", () => { state.auditPage = 1; guard(loadAudit); });
 /* ── 告警中心 ─────────────────────────────────────────── */
 
+// 形狀各不相同（見 STATUS 上方的說明）：顏色之外，光看形狀也分得出嚴重性。
 const ALERT_SEV = {
-  info:     { text: "資訊", tone: "neutral" },
-  warning:  { text: "警告", tone: "warning" },
-  critical: { text: "嚴重", tone: "critical" },
+  info:     { text: "資訊", tone: "neutral",  glyph: "ring" },
+  warning:  { text: "警告", tone: "warning",  glyph: "triangle" },
+  critical: { text: "嚴重", tone: "critical", glyph: "diamond" },
 };
+// 通道的「最低嚴重性」換成白話：這個通道會收到哪些告警。
+const CHANNEL_SEV_TEXT = { info: "全部告警", warning: "警告以上", critical: "只有嚴重" };
+const CHANNEL_TYPE_TEXT = { webhook: "Webhook", email: "Email" };
+
+function severityBadge(severity, text) {
+  const meta = ALERT_SEV[severity] || { text: severity, tone: "neutral", glyph: "ring" };
+  const wrap = el("span", null, "badge b-" + meta.tone);
+  wrap.appendChild(glyph(meta.glyph));
+  wrap.appendChild(el("span", text || meta.text));
+  return wrap;
+}
+
+/** Where a channel delivers. A webhook URL carries its own secret token in the
+ *  path, so the list shows only the host -- enough to tell channels apart. */
+function channelDestination(c) {
+  const wrap = el("span", null, "ch-dest");
+  wrap.appendChild(pill(CHANNEL_TYPE_TEXT[c.type] || c.type));
+  let addr = c.target;
+  if (c.type === "webhook") {
+    try { addr = new URL(c.target).host + "/…"; } catch { addr = "（網址格式有誤）"; }
+  }
+  wrap.appendChild(el("span", addr, "addr"));
+  return wrap;
+}
 const ALERT_TYPE = {
   OFFLINE: "端點離線",
   LOW_DISK: "磁碟不足",
@@ -2692,9 +2772,7 @@ async function loadAlerts() {
   const data = await request("GET", "/api/alerts" + (status ? "?status=" + encodeURIComponent(status) : ""));
 
   fillTable("alerts-table", data.items.map((a) => {
-    const sev = ALERT_SEV[a.severity] || { text: a.severity, tone: "neutral" };
-    const sevBadge = el("span", null, "badge b-" + sev.tone);
-    sevBadge.appendChild(el("span", sev.text));
+    const sevBadge = severityBadge(a.severity);
 
     const actions = el("span", null, "row-actions");
     if (a.status === "OPEN") {
@@ -2721,41 +2799,71 @@ async function loadAlerts() {
 async function loadChannels() {
   const data = await request("GET", "/api/alert-channels");
   fillTable("channels-table", data.items.map((c) => {
-    const toggle = el("button", c.enabled ? "停用" : "啟用", "ghost");
+    const test = el("button", "測試", "ghost small");
+    test.disabled = !c.enabled;
+    test.title = c.enabled ? "送一則測試通知" : "通道已停用";
+    test.addEventListener("click", () => guard(async () => {
+      test.disabled = true;
+      test.textContent = "傳送中…";
+      try {
+        const r = await request("POST", `/api/alert-channels/${c.id}/test`, {});
+        flash(r.ok ? `已送出測試通知到「${c.name}」。` : ("測試失敗：" + (r.error || "未知錯誤")), !r.ok);
+      } finally {
+        test.disabled = false;
+        test.textContent = "測試";
+      }
+    }));
+    const toggle = el("button", c.enabled ? "停用" : "啟用", "ghost small");
     toggle.addEventListener("click", () => guard(async () => {
       await request("PATCH", `/api/alert-channels/${c.id}`, { enabled: !c.enabled });
       loadChannels();
     }));
-    const test = el("button", "測試", "ghost");
-    test.addEventListener("click", () => guard(async () => {
-      const r = await request("POST", `/api/alert-channels/${c.id}/test`, {});
-      flash(r.ok ? "測試通知已送出。" : ("測試失敗：" + (r.error || "未知錯誤")), !r.ok);
-    }));
-    const del = el("button", "刪除", "ghost danger");
+    const del = el("button", "刪除", "ghost small danger");
     del.addEventListener("click", () => guard(async () => {
       if (!confirm(`刪除通道「${c.name}」？`)) return;
       await request("DELETE", `/api/alert-channels/${c.id}`);
       loadChannels();
     }));
     const acts = el("span", null, "row-actions");
-    acts.appendChild(toggle); acts.appendChild(test); acts.appendChild(del);
-    return row([c.name, c.type, c.target, c.minSeverity, c.enabled ? "是" : "否", acts]);
-  }), "尚未設定任何通道。告警仍會彙整在上方，只是不會外送。");
+    acts.appendChild(test); acts.appendChild(toggle); acts.appendChild(del);
+    return row([
+      c.name,
+      channelDestination(c),
+      severityBadge(c.minSeverity, CHANNEL_SEV_TEXT[c.minSeverity]),
+      badge(c.enabled ? "CHANNEL_ON" : "CHANNEL_OFF"),
+      acts,
+    ]);
+  }), "尚未設定通知通道。告警仍會彙整在上方，只是不會主動推送。");
+
+  // Nothing set up yet: open the form so the next step is obvious.
+  if (!data.items.length) $("ch-form-panel").open = true;
+}
+
+function syncChannelForm() {
+  const email = $("ch-type").value === "email";
+  $("ch-target-label").textContent = email ? "收件人 Email" : "Webhook 網址";
+  $("ch-target").type = email ? "email" : "url";
+  $("ch-target").placeholder = email ? "例如 it-team@example.com" : "https://hooks.slack.com/services/…";
+  $("ch-hint").textContent = email
+    ? "伺服器需先設定寄信用的 SMTP（.env 的 EEM_SMTP_HOST 等），新增後可按「測試」確認收得到。"
+    : "Webhook 網址由聊天服務產生（例如 Slack 的 Incoming Webhook），新增後可按「測試」確認收得到。";
 }
 
 $("al-refresh").addEventListener("click", () => guard(loadAlerts));
 $("al-status").addEventListener("change", () => guard(loadAlerts));
+$("ch-type").addEventListener("change", syncChannelForm);
 $("al-channel-form").addEventListener("submit", (event) => {
   event.preventDefault();
   guard(async () => {
     await request("POST", "/api/alert-channels", {
       name: $("ch-name").value,
       type: $("ch-type").value,
-      target: $("ch-target").value,
+      target: $("ch-target").value.trim(),
       minSeverity: $("ch-sev").value,
     });
     $("ch-name").value = ""; $("ch-target").value = "";
-    flash("通道已新增。");
+    $("ch-form-panel").open = false;
+    flash("通道已新增，可按「測試」確認收得到。");
     loadChannels();
   });
 });

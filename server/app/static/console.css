@@ -125,7 +125,10 @@ h3 { font-size: .9375rem; }
 
 /* ── Shell ───────────────────────────────────────────── */
 
-.shell { display: grid; grid-template-columns: var(--sidebar-w) 1fr; min-height: 100vh; }
+/* minmax(0, 1fr), not 1fr: a plain 1fr track grows to its widest table, so on a
+   laptop at 125-150% scaling the whole page scrolled sideways instead of the
+   table scrolling inside its .table-wrap. */
+.shell { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr); min-height: 100vh; }
 
 .sidebar {
   display: flex;
@@ -241,8 +244,10 @@ input:focus, select:focus {
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .toolbar { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
-.toolbar input { max-width: 240px; }
-.toolbar select { max-width: 160px; }
+/* Fixed/auto widths, not the global 100%: inside a shrink-to-fit panel head a
+   100% field takes the whole row and pushes the button onto a line of its own. */
+.toolbar input { width: 240px; max-width: 100%; }
+.toolbar select { width: auto; max-width: 100%; }
 .toolbar button { flex: none; }
 
 /* ── Panels ──────────────────────────────────────────── */
@@ -329,7 +334,15 @@ input:focus, select:focus {
   display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
 }
 .form-actions button { min-width: 160px; }
-.form-actions .hint { margin: 0; }
+.form-actions .hint { margin: 0; color: var(--ink-2); font-size: .75rem; }
+
+/* Notification channels: one row on a desktop, the URL getting the room. */
+.form-grid.ch-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1.1fr);
+  align-items: start;
+}
+.ch-dest { display: inline-flex; align-items: center; gap: .5rem; }
+.ch-dest .addr { color: var(--ink-2); }
 
 .section-head { margin: 2rem 0 .25rem; }
 .section-head + .sub { margin-top: 0; }
@@ -736,6 +749,15 @@ td.empty {
 }
 .alert.bad { background: rgba(208, 59, 59, .1); color: var(--critical); }
 .login-card .alert { margin: 1rem 0 0; }
+/* A dismissible notice: title on the left, a quiet ✕ on the right. */
+.alert-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .2rem; }
+.alert-close {
+  flex: none;
+  padding: .1rem .35rem; line-height: 1;
+  background: none; border: 0;
+  color: inherit; font-size: .95rem; opacity: .65;
+}
+.alert-close:hover { opacity: 1; background: rgba(0, 0, 0, .06); }
 
 .reveal {
   border: 1px solid var(--warning);
@@ -767,10 +789,16 @@ td.empty {
 @media (max-width: 620px) {
   .period { grid-template-columns: repeat(3, 1fr); }
   .period-preview { grid-column: 1 / -1; padding-bottom: 0; }
+  .form-grid.ch-grid { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 621px) and (max-width: 1100px) {
+  .form-grid.ch-grid { grid-template-columns: 1fr 1fr; }
+  .form-grid.ch-grid .ch-target { grid-column: 1 / -1; }
 }
 
 @media (max-width: 820px) {
-  .shell { grid-template-columns: 1fr; }
+  .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar {
     position: static; height: auto;
     flex-direction: row; align-items: center; flex-wrap: wrap;
