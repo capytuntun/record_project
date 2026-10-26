@@ -66,6 +66,14 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+# 輸出被導向時（存成記錄檔、派送工具）一律寫 UTF-8：預設的 cp950 寫不出 ✓ ▶，
+# dotnet 寫進管道的 UTF-8 也會被當成 cp950 解成亂碼。Python 子行程跟著改用
+# UTF-8，Invoke-Flask 讀回來才對得上。直接在視窗裡執行時不動。
+if ([Console]::IsOutputRedirected) {
+    try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+    $env:PYTHONIOENCODING = "utf-8"
+}
+
 $TaskName     = "EEMManagementServer"
 $FirewallRule = "螢幕測錄系統"
 $AppDir       = Join-Path $InstallDir "server"
@@ -495,10 +503,15 @@ if (-not $NoPackaging) {
                         $borrowed += $k
                     }
                 }
+                # build.ps1 的輸出被接管時寫 UTF-8；本行程的輸出若在 PowerShell 裡被導向
+                # （.\install.ps1 *> log.txt），就得用 UTF-8 讀回來，否則一樣是亂碼。
+                $prevEncoding = [Console]::OutputEncoding
+                try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
                 try {
                     & powershell -NoProfile -ExecutionPolicy Bypass -File $agentBuild -SkipWixCheck
                 } finally {
                     foreach ($k in $borrowed) { [Environment]::SetEnvironmentVariable($k, $null) }
+                    try { [Console]::OutputEncoding = $prevEncoding } catch { }
                 }
                 if ($LASTEXITCODE -eq 0 -and (Test-Path $agentExe)) {
                     $mb = [math]::Round((Get-Item $agentExe).Length / 1MB, 1)
@@ -769,6 +782,8 @@ if (-not $NoPackaging) {
             if (Test-Path $wixExe) {
                 & $wixExe extension add -g WixToolset.Util.wixext/5.0.2 2>&1 | Out-Null
                 & $wixExe extension add -g WixToolset.Firewall.wixext/5.0.2 2>&1 | Out-Null
+                # 安裝精靈（下一步、選安裝位置）的畫面來自 UI 擴充。
+                & $wixExe extension add -g WixToolset.UI.wixext/5.0.2 2>&1 | Out-Null
                 # WiX 是用 Windows 的使用者設定檔 API 去找 .wix\extensions，**不看**
                 # USERPROFILE 環境變數，所以擴充一定會裝進「執行安裝的管理員」設定檔。
                 # 服務以 SYSTEM 執行，不複製過去的話建置會失敗：

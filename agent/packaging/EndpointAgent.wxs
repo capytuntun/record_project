@@ -16,7 +16,8 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
-     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall">
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
 
   <?ifndef CustomActionDll ?><?define CustomActionDll = "..\src\EndpointAgent.CustomActions\bin\Release\net472\EndpointAgent.CustomActions.CA.dll" ?><?endif?>
   <?ifndef ServerUrl ?><?define ServerUrl = "https://localhost" ?><?endif?>
@@ -25,6 +26,8 @@
   <?ifndef AdminPasswordHash ?><?define AdminPasswordHash = "" ?><?endif?>
   <?ifndef PackageLabel ?><?define PackageLabel = "Endpoint Agent" ?><?endif?>
   <?ifndef AgentVersion ?><?define AgentVersion = "0.1.0" ?><?endif?>
+  <!-- Absolute: the server builds from a temp working directory. -->
+  <?ifndef LicenseRtf ?><?define LicenseRtf = "$(sys.SOURCEFILEDIR)License.rtf" ?><?endif?>
 
   <!-- Codepage 65001: the service description and error messages shown to the
        user are Traditional Chinese, which the MSI default (1252) cannot encode.
@@ -42,6 +45,9 @@
          the Chinese strings live in the database, which is UTF-8 above. -->
     <SummaryInformation Description="Endpoint Management Agent - $(PackageLabel)" />
 
+    <!-- Default schedule (afterInstallValidate). Moving the old product's
+         removal into this install's script fails with error 2613 as soon as
+         any deferred action precedes it. -->
     <MajorUpgrade
       AllowSameVersionUpgrades="yes"
       DowngradeErrorMessage="已安裝較新版本的端點管理 Agent。" />
@@ -51,7 +57,26 @@
     <!-- Visible in Apps & Features, with a working support link. -->
     <Property Id="ARPPRODUCTICON" Value="AgentIcon" />
     <Property Id="ARPNOREPAIR" Value="0" />
-    <Property Id="ARPNOMODIFY" Value="1" />
+    <!-- ARPNOMODIFY=1 comes from WixUI_InstallDir itself (no "Change" button:
+         there are no optional features to change). -->
+
+    <!-- Double-clicking the MSI runs a wizard (welcome, notice, install folder,
+         install, finish). Silent deployment (msiexec /qn, GPO, SCCM) never
+         shows it. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(LicenseRtf)" />
+
+    <!-- Remember the folder chosen in the wizard, so an upgrade installs over
+         it instead of silently moving back to the default. -->
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch Id="RememberInstallFolder" Root="HKLM" Bitness="always64"
+                      Key="SOFTWARE\EnterpriseIT\EndpointAgent" Name="InstallDir" Type="raw" />
+    </Property>
+
+    <!-- Restart Manager cannot close the tray helper (it has no window to ask),
+         so its "files in use" prompt would only offer a reboot. StopTrayHelpers
+         below releases the exe instead. -->
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
 
     <Launch Condition="Installed OR VersionNT64"
             Message="此 Agent 僅支援 64 位元 Windows。" />
@@ -78,6 +103,48 @@
                   DllEntry="CheckUninstallPassword"
                   Execute="immediate"
                   Return="check" />
+
+    <!-- End the tray helper ("EndpointAgent.exe tray") before files are
+         replaced or removed. It runs from INSTALLFOLDER, so while it lives the
+         exe is locked: an uninstall from Settings would end with the exe and
+         tray icon still there until a reboot, and an upgrade could not replace
+         the binary. After an install or upgrade the service starts the new tray
+         again within seconds. Return="ignore" on both: nothing running is the
+         normal case, and this must never fail an install or a removal.
+
+         Twice, because neither alone covers everything:
+           * StopTrayHelpersEarly (immediate, as the installing user) runs
+             before InstallValidate, so before the files-in-use check and
+             before an upgrade removes the previous version, including
+             versions built before this action existed.
+           * StopTrayHelpers (deferred, as SYSTEM) runs once the service is
+             stopped and cannot relaunch the tray, and also reaches the trays
+             of other signed-in users. -->
+    <SetProperty Id="WixQuietExecCmdLine"
+                 Value="&quot;[System64Folder]taskkill.exe&quot; /F /T /IM EndpointAgent.exe"
+                 Before="StopTrayHelpersEarly" Sequence="execute" />
+    <CustomAction Id="StopTrayHelpersEarly"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec"
+                  Execute="immediate" Return="ignore" />
+
+    <SetProperty Id="StopTrayHelpers"
+                 Value="&quot;[System64Folder]taskkill.exe&quot; /F /T /IM EndpointAgent.exe"
+                 Before="StopTrayHelpers" Sequence="execute" />
+    <CustomAction Id="StopTrayHelpers"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <!-- The data folder to delete on a real uninstall (see RemoveFolderEx below).
+         Set from the system folder property, which exists from the start: the
+         DATAFOLDER directory itself is only resolved at CostFinalize, after
+         RemoveFolderEx has already looked, so pointing it there removed nothing.
+         Empty during a major upgrade, so the device keeps its enrollment. -->
+    <SetProperty Id="AGENTDATAREMOVE"
+                 Value="[CommonAppDataFolder]EndpointAgent\"
+                 Before="Wix4RemoveFoldersEx_$(sys.BUILDARCHSHORT)" Sequence="execute"
+                 Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
 
 <?ifdef ServerCaCert ?>
     <!-- Trust the management server's certificate on this endpoint.
@@ -114,6 +181,11 @@
            (upgrades must not require the password). -->
       <Custom Action="CheckUninstallPassword" Before="InstallValidate"
               Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <!-- Every run that touches files: install over a running tray, upgrade,
+           repair, uninstall. The early one waits for the password check, so a
+           cancelled removal leaves the tray alone. -->
+      <Custom Action="StopTrayHelpersEarly" After="CheckUninstallPassword" />
+      <Custom Action="StopTrayHelpers" After="StopServices" />
 <?ifdef ServerCaCert ?>
       <!-- After InstallFiles: the .cer must be on disk before certutil reads it. -->
       <Custom Action="TrustServerCertificate" After="InstallFiles"
@@ -135,11 +207,9 @@
       <Directory Id="DATAFOLDER" Name="EndpointAgent" />
     </StandardDirectory>
 
-<?ifdef ServerCaCert ?>
-    <!-- Referenced by the certutil custom actions; naming it here puts it in
-         the Directory table so [System64Folder] resolves. -->
+    <!-- Referenced by StopTrayHelpers and the certutil custom actions; naming
+         it here puts it in the Directory table so [System64Folder] resolves. -->
     <StandardDirectory Id="System64Folder" />
-<?endif?>
   </Fragment>
 
   <Fragment>
@@ -189,8 +259,9 @@
               Name="agent.config.json"
               KeyPath="yes" />
         <!-- Leave enrollment state behind on uninstall? No: a reinstall should
-             start clean rather than resurrect a stale identity. -->
-        <util:RemoveFolderEx On="uninstall" Property="DATAFOLDER" />
+             start clean rather than resurrect a stale identity. (Kept across a
+             major upgrade: AGENTDATAREMOVE is empty then.) -->
+        <util:RemoveFolderEx On="uninstall" Property="AGENTDATAREMOVE" />
       </Component>
 
       <!-- Registering the event log source at install time means the service
@@ -239,6 +310,8 @@
           <RegistryValue Type="string" Name="ServerUrl" Value="$(ServerUrl)" />
           <RegistryValue Type="string" Name="OrganizationId" Value="$(OrgId)" />
           <RegistryValue Type="string" Name="Version" Value="$(AgentVersion)" />
+          <!-- Read back by RememberInstallFolder on the next upgrade. -->
+          <RegistryValue Type="string" Name="InstallDir" Value="[INSTALLFOLDER]" />
         </RegistryKey>
       </Component>
 

@@ -81,6 +81,7 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
     dotnet tool install --global wix --version 5.*
     wix extension add -g WixToolset.Util.wixext/5.0.2
     wix extension add -g WixToolset.Firewall.wixext/5.0.2
+    wix extension add -g WixToolset.UI.wixext/5.0.2
 若剛裝好仍找不到，開一個新的 PowerShell 視窗讓 PATH 生效。
 "@
 }
@@ -120,6 +121,9 @@ try {
         "-arch", "x64",
         "-ext", "WixToolset.Util.wixext",
         "-ext", "WixToolset.Firewall.wixext",
+        # 安裝精靈；介面字串用繁體中文。
+        "-ext", "WixToolset.UI.wixext",
+        "-culture", "zh-TW",
         "-d", "AgentBinary=$binary",
         "-d", "CustomActionDll=$caDll",
         "-d", "ConfigFile=$configFile",
@@ -159,4 +163,4 @@ Write-Host ("  大小    {0:N0} bytes" -f $item.Length)
 Write-Host "  SHA256  $sha"
 Write-Host "  簽章    $(if ($CertPath) { '已簽章' } else { '未簽章（SmartScreen／AppLocker 可能會擋）' })"
 Write-Host ""
-Write-Host "派送後在端點上安裝：msiexec /i `"$($item.Name)`" /qn"
+Write-Host "在端點上安裝：雙擊 MSI 跑安裝精靈，或靜默派送 msiexec /i `"$($item.Name)`" /qn"

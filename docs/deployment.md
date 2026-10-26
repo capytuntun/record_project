@@ -488,7 +488,7 @@ EndpointAgent.wxs(92) : error WIX0389: The Directory/@Name attribute's value,
 | # | 在哪 | 做什麼 |
 | --- | --- | --- |
 | 1 | 主控台（Linux） | 「安裝包 → 註冊憑證」建立一張憑證，複製憑證字串。整個車隊共用就設**不限次數**；退役時記得撤銷 |
-| 2 | Windows 建置機 | 安裝 .NET SDK 與 WiX：`dotnet tool install --global wix --version 5.*`、`wix extension add -g WixToolset.Util.wixext/5.0.2`、`wix extension add -g WixToolset.Firewall.wixext/5.0.2` |
+| 2 | Windows 建置機 | 安裝 .NET SDK 與 WiX：`dotnet tool install --global wix --version 5.*`、`wix extension add -g WixToolset.Util.wixext/5.0.2`、`wix extension add -g WixToolset.Firewall.wixext/5.0.2`、`wix extension add -g WixToolset.UI.wixext/5.0.2`（安裝精靈畫面） |
 | 3 | Windows 建置機 | 取得專案原始碼，在 `agent\` 執行 `.\build.ps1`（產生 `publish\EndpointAgent.exe`，只在 agent 程式碼改動時才需要重跑） |
 | 4 | Windows 建置機 | 建 MSI：見下方指令 |
 | 5 | 端點 | `msiexec /i <你的>.msi /qn`，或用 GPO／SCCM 派送 |

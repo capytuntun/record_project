@@ -24,6 +24,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# When the output is captured (a log file, server/install.ps1), write UTF-8.
+# dotnet writes UTF-8 to a pipe; decoding it with the default code page (cp950
+# on Traditional Chinese Windows) turns its localized messages into mojibake.
+if ([Console]::IsOutputRedirected) {
+    try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+}
+
 $root = $PSScriptRoot
 $project = Join-Path $root "src/EndpointAgent/EndpointAgent.csproj"
 $caProject = Join-Path $root "src/EndpointAgent.CustomActions/EndpointAgent.CustomActions.csproj"
@@ -67,6 +75,7 @@ if ($SkipWixCheck) {
     Write-Warning "  dotnet tool install --global wix --version 5.*"
     Write-Warning "  wix extension add -g WixToolset.Util.wixext/5.0.2"
     Write-Warning "  wix extension add -g WixToolset.Firewall.wixext/5.0.2"
+    Write-Warning "  wix extension add -g WixToolset.UI.wixext/5.0.2"
     Write-Warning "Use WiX 5, not 6/7 -- those require accepting a paid maintenance-fee EULA."
 } else {
     Write-Host "OK  wix $((& $wix.Source --version) -join '')" -ForegroundColor Green

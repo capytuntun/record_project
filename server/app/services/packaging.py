@@ -257,6 +257,9 @@ def build_msi(
             "-arch", "x64",
             "-ext", "WixToolset.Util.wixext",
             "-ext", "WixToolset.Firewall.wixext",
+            # The install wizard; zh-TW for its built-in dialog strings.
+            "-ext", "WixToolset.UI.wixext",
+            "-culture", "zh-TW",
             "-d", f"AgentBinary={agent_binary}",
             "-d", f"CustomActionDll={ca_dll}",
             "-d", f"ConfigFile={config_file}",
@@ -303,6 +306,10 @@ def build_msi(
                 "",
             )
             detail = first_error.split(":", 1)[-1].strip() if first_error else ""
+            if "WIX0144" in (result.stdout or ""):
+                # A WiX extension is missing -- typically the UI extension on a
+                # server installed before the install wizard was added.
+                detail = "伺服器缺少 WiX 擴充，請重新執行 install.ps1 補齊。" + detail
             raise PackagingError(f"MSI 建置失敗。{detail}"[:240])
 
         if not staged_msi.is_file():

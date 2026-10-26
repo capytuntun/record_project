@@ -29,6 +29,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# When the output is captured (the server decodes it as UTF-8), write UTF-8. The
+# default code page (cp950 on Traditional Chinese Windows) garbles the localized
+# StatusMessage -- which is exactly what a failed signing shows the operator.
+if ([Console]::IsOutputRedirected) {
+    try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+}
+
 if (-not (Test-Path $File))     { throw "File not found: $File" }
 if (-not (Test-Path $CertPath)) { throw "Certificate not found: $CertPath" }
 
