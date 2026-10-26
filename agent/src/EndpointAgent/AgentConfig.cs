@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -49,6 +50,13 @@ public sealed class AgentConfig
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Keep values verbatim. The default (HTML-safe) encoder escapes '+' to
+        // +, which mangles the base64 in adminPasswordHash: the uninstall
+        // guard reads the config with a tiny hand-rolled parser, the + is
+        // no longer valid base64, verification throws, and -- by its fail-open
+        // policy -- the password gate is SKIPPED. A local config file is not
+        // HTML, so relaxed escaping is both safe and correct here.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
     /// <summary>

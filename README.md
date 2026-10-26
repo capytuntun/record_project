@@ -99,3 +99,9 @@ msiexec /x "{產品碼}" UNINSTALLPWD=<IT密碼> /qn
 ```
 msiexec /x "{產品碼}" UNINSTALLPWD=<IT密碼> /qb /l*v C:\Windows\Temp\eem-uninstall.log
 ```
+從「設定 → 應用程式」移除時會跳出密碼框，輸入 IT 密碼即可。
+
+驗證密碼保護有生效時，**一定要連錯誤密碼一起測**：`UNINSTALLPWD=隨便打` 必須失敗、
+程式必須還在，log 裡要有 `uninstall blocked -- BlockWrongPassword`；只測正確密碼看不出
+保護是否被略過（曾有一版因設定檔的雜湊被轉義而對任何密碼放行）。對應的單元測試在
+`agent\src\EndpointAgent.CustomActions.Tests`（`dotnet test` 執行）。

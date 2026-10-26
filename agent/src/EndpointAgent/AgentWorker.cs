@@ -194,13 +194,53 @@ public sealed class AgentWorker(
                     }
                 }
             }
+            catch (CredentialRejectedException ex) when (
+                ex.Renewable && !string.IsNullOrWhiteSpace(_config.EnrollmentToken))
+            {
+                // The server has no record of this credential (typically it was
+                // rebuilt) or it ran out, and the package installed since then
+                // brought a fresh enrollment token. A credential that still works
+                // always wins at startup, so the token is only spent here. Without
+                // this the agent sat idle until someone restarted the service.
+                logger.LogWarning("裝置憑證已不被伺服器接受（{Reason}），改用安裝包的註冊憑證重新註冊。",
+                    ex.Reason);
+                CredentialStore.Clear();
+                var renewed = await EnrollAsync(client, ct);
+                if (renewed is null) return;   // reason already reported
+                credential = renewed;
+                failures = 0;
+                // The refused heartbeat carried the extended inventory; the new
+                // endpoint has none yet, so send it again now.
+                lastInventoryAt = DateTime.MinValue;
+                continue;
+            }
             catch (CredentialRejectedException ex)
             {
                 // Revoked, expired, or the endpoint was disabled. Nothing the
                 // agent can do on its own; say so where IT will see it.
                 logger.LogCritical("裝置憑證已失效：{Message}", ex.Message);
                 notifier.Error("端點管理 Agent 已停止回報", ex.Message);
-                CredentialStore.Clear();
+                if (ex.Renewable)
+                {
+                    // No token to replace it yet: a package that brings one
+                    // enrolls at the next start.
+                    CredentialStore.Clear();
+                }
+                else
+                {
+                    // An administrator turned this device away (disabled, deleted
+                    // or revoked). Keep the dead credential, so every restart gets
+                    // the same answer instead of enrolling afresh with whatever
+                    // token a later package (a fleet-wide upgrade, say) leaves on
+                    // disk. Reinstalling, which wipes this folder, or
+                    // reset-enrollment with the IT password still brings it back.
+                    if (!string.IsNullOrWhiteSpace(_config.EnrollmentToken))
+                    {
+                        _config.EnrollmentToken = null;
+                        _config.Save();
+                        logger.LogWarning("已作廢本機留存的註冊憑證：此裝置已被 IT 停用或移除。");
+                    }
+                }
                 return;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

@@ -33,9 +33,21 @@ public sealed class EnrollmentRejectedException(string message, string? reason)
     public string? Reason { get; } = reason;
 }
 
-/// <summary>The credential no longer authenticates -- revoked, expired, or the
-/// endpoint was disabled by an administrator.</summary>
-public sealed class CredentialRejectedException(string message) : Exception(message);
+/// <summary>The credential no longer authenticates -- revoked, expired, unknown
+/// to the server, or the endpoint was disabled by an administrator.</summary>
+public sealed class CredentialRejectedException(string message, string? reason)
+    : Exception(message)
+{
+    /// <summary>"unknown_credential", "expired" or "revoked", when the server
+    /// says; null from an older server and on a 403 (endpoint disabled).</summary>
+    public string? Reason { get; } = reason;
+
+    /// <summary>The server has no record of the credential (it was rebuilt) or it
+    /// simply ran out: nobody decided to keep this device out, so an enrollment
+    /// token IT has since deployed may replace it. Revoked -- the endpoint was
+    /// disabled, deleted or its credential revoked -- is never renewable.</summary>
+    public bool Renewable => Reason is "unknown_credential" or "expired";
+}
 
 /// <summary>
 /// Talks to the management server. TLS verification is left at the platform
@@ -104,7 +116,7 @@ public sealed class ManagementClient : IDisposable
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
             var error = await ReadErrorAsync(response, ct);
-            throw new CredentialRejectedException(error.Message);
+            throw new CredentialRejectedException(error.Message, error.Reason);
         }
         response.EnsureSuccessStatusCode();
 
@@ -134,7 +146,7 @@ public sealed class ManagementClient : IDisposable
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
             var error = await ReadErrorAsync(response, ct);
-            throw new CredentialRejectedException(error.Message);
+            throw new CredentialRejectedException(error.Message, error.Reason);
         }
         response.EnsureSuccessStatusCode();
     }
@@ -148,7 +160,7 @@ public sealed class ManagementClient : IDisposable
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
             var error = await ReadErrorAsync(response, ct);
-            throw new CredentialRejectedException(error.Message);
+            throw new CredentialRejectedException(error.Message, error.Reason);
         }
         response.EnsureSuccessStatusCode();
 

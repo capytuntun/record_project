@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from app.models import AdminEndpointScope, Endpoint, EnrollmentToken, db, utcnow
+from app.models import (
+    AdminEndpointScope,
+    Endpoint,
+    EndpointCredential,
+    EnrollmentToken,
+    db,
+    utcnow,
+)
 
 from .conftest import auth_header
 
@@ -153,6 +160,56 @@ def test_disabling_an_endpoint_revokes_its_credential(client, super_admin_token)
         json={},
         headers=auth_header(enrolled["deviceCredential"]),
     ).status_code == 401
+
+
+def _heartbeat_refusal_reason(client, credential: str) -> str | None:
+    response = client.post("/api/agent/heartbeat", json={}, headers=auth_header(credential))
+    assert response.status_code == 401
+    return (response.get_json().get("details") or {}).get("reason")
+
+
+def test_credential_the_server_never_issued_is_reported_as_unknown(client):
+    # What an agent sees after the server is rebuilt: it may then enroll with a
+    # token from a newer package.
+    assert _heartbeat_refusal_reason(client, "issued-by-a-previous-server") == "unknown_credential"
+
+
+def test_disabled_endpoint_credential_is_reported_as_revoked(client, super_admin_token):
+    created = create_enrollment_token(client, super_admin_token)
+    enrolled = enroll(client, created["token"]).get_json()
+    client.post(
+        f"/api/endpoints/{enrolled['endpointId']}/disable",
+        json={"reason": "employee left"},
+        headers=auth_header(super_admin_token),
+    )
+
+    # "revoked" tells the agent not to come back on its own.
+    assert _heartbeat_refusal_reason(client, enrolled["deviceCredential"]) == "revoked"
+
+
+def test_deleted_endpoint_credential_is_reported_as_revoked(client, super_admin_token):
+    created = create_enrollment_token(client, super_admin_token)
+    enrolled = enroll(client, created["token"]).get_json()
+    response = client.delete(
+        f"/api/endpoints/{enrolled['endpointId']}", headers=auth_header(super_admin_token)
+    )
+    assert response.status_code == 200
+
+    assert _heartbeat_refusal_reason(client, enrolled["deviceCredential"]) == "revoked"
+
+
+def test_expired_credential_is_reported_as_expired(client, super_admin_token):
+    created = create_enrollment_token(client, super_admin_token)
+    enrolled = enroll(client, created["token"]).get_json()
+    record = (
+        db.session.query(EndpointCredential)
+        .filter(EndpointCredential.endpoint_id == enrolled["endpointId"])
+        .one()
+    )
+    record.expires_at = utcnow() - timedelta(minutes=1)
+    db.session.commit()
+
+    assert _heartbeat_refusal_reason(client, enrolled["deviceCredential"]) == "expired"
 
 
 def test_credential_rotation_invalidates_the_old_secret(client, super_admin_token):

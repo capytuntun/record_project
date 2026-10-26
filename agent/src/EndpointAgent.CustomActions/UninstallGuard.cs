@@ -93,6 +93,11 @@ public static class UninstallGuard
     /// Extract adminPasswordHash from the config JSON. Deliberately a tiny
     /// hand-rolled scan rather than a JSON dependency, to keep the custom-action
     /// DLL small and free of assembly-load surprises during uninstall.
+    ///
+    /// The value is JSON-unescaped, so a hash the agent wrote with + for a
+    /// '+' (System.Text.Json's HTML-safe encoder does this) decodes back to the
+    /// real base64. Without that the hash is not valid base64, VerifyPassword
+    /// throws, and the fail-open policy would skip the password gate entirely.
     /// </summary>
     internal static string? ReadAdminPasswordHash(string configPath)
     {
@@ -108,11 +113,50 @@ public static class UninstallGuard
 
         var start = json.IndexOf('"', i + 1);
         if (start < 0) return null;
-        var end = json.IndexOf('"', start + 1);
-        if (end < 0) return null;
 
-        var value = json.Substring(start + 1, end - start - 1);
+        var value = ReadJsonString(json, start);
         return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    /// <summary>
+    /// Decode a JSON string literal starting at the opening quote
+    /// <paramref name="openQuote"/>, honouring \", \\, \/, \b, \f, \n, \r, \t and
+    /// \uXXXX. Returns null if the literal is malformed or unterminated. Just
+    /// enough of the grammar to read one string value back exactly as written.
+    /// </summary>
+    internal static string? ReadJsonString(string json, int openQuote)
+    {
+        var sb = new StringBuilder();
+        for (var p = openQuote + 1; p < json.Length; p++)
+        {
+            var c = json[p];
+            if (c == '"') return sb.ToString();
+            if (c != '\\') { sb.Append(c); continue; }
+
+            if (++p >= json.Length) return null;
+            switch (json[p])
+            {
+                case '"': sb.Append('"'); break;
+                case '\\': sb.Append('\\'); break;
+                case '/': sb.Append('/'); break;
+                case 'b': sb.Append('\b'); break;
+                case 'f': sb.Append('\f'); break;
+                case 'n': sb.Append('\n'); break;
+                case 'r': sb.Append('\r'); break;
+                case 't': sb.Append('\t'); break;
+                case 'u':
+                    if (p + 4 >= json.Length) return null;
+                    var hex = json.Substring(p + 1, 4);
+                    if (!int.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+                                      System.Globalization.CultureInfo.InvariantCulture, out var code))
+                        return null;
+                    sb.Append((char)code);
+                    p += 4;
+                    break;
+                default: return null;   // invalid escape -> treat as unreadable
+            }
+        }
+        return null;   // unterminated string
     }
 
     /// <summary>

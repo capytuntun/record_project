@@ -18,6 +18,20 @@
     <PackageReference Include="WixToolset.Dtf.CustomAction" Version="5.0.2" />
   </ItemGroup>
 
+  <!-- UninstallGuard's decision logic is unit-tested; the tests live beside this
+       project and need its internals. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="EndpointAgent.CustomActions.Tests" />
+  </ItemGroup>
+
+  <!--
+    MakeSfxCA packs Content items into the .CA.dll; SfxCA reads this file to pick
+    the CLR. It must be listed as Content explicitly; SDK projects do not add it on their own.
+  -->
+  <ItemGroup>
+    <Content Include="CustomAction.config" />
+  </ItemGroup>
+
   <!--
     The uninstall password prompt (PasswordPrompt.cs). Both assemblies ship with
     the .NET Framework the custom-action host already loads, so this adds no

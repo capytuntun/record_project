@@ -110,12 +110,23 @@ def authenticate_agent_credential(presented: str):
         .filter(EndpointCredential.secret_hash == sha256_hex(presented or ""))
         .one_or_none()
     )
-    if credential is None or not credential.is_usable():
-        raise AuthenticationError("Endpoint credential is not valid.")
+    # The reason tells the agent whether it may replace the credential with an
+    # enrollment token IT has since deployed: yes when the server has no record
+    # of it (typically rebuilt, or restored from an older backup) or it simply
+    # ran out; never when an administrator revoked it -- disabling or deleting
+    # an endpoint revokes its credentials, so that is how "keep this device
+    # out" arrives. Only the holder of the secret learns which one applies.
+    if credential is None:
+        raise AuthenticationError(
+            "Endpoint credential is not valid.", details={"reason": "unknown_credential"}
+        )
+    if not credential.is_usable():
+        reason = "revoked" if credential.revoked_at is not None else "expired"
+        raise AuthenticationError("Endpoint credential is not valid.", details={"reason": reason})
 
     endpoint = credential.endpoint
     if endpoint is None or endpoint.is_deleted:
-        raise AuthenticationError("Endpoint credential is not valid.")
+        raise AuthenticationError("Endpoint credential is not valid.", details={"reason": "revoked"})
     if endpoint.state == STATE_DISABLED:
         # Disabled is an administrative decision; say so plainly so the agent
         # can stop retrying and surface it to enterprise IT.
