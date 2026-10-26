@@ -35,6 +35,11 @@
 .PARAMETER NoRecording
     略過 FFmpeg。不裝 FFmpeg 時伺服器照常運作，只是不會錄影。
 
+.PARAMETER ResultFile
+    安裝完成後把結果（網址、管理員帳號、「只顯示一次」的密碼、是否可錄影等）寫成
+    一個 INI 檔。給圖形安裝精靈（server\packaging\EEMServer.iss）用，一般手動安裝
+    不需要。密碼只在本次新建帳號時才有；精靈讀完會立刻刪除這個檔。
+
 .PARAMETER Uninstall
     移除排程工作、相關行程與防火牆規則（資料保留）。加 -Purge 連同整個安裝目錄
     一併刪除（會要求輸入 DELETE 確認，加 -Force 略過）。完全移除建議直接用
@@ -58,6 +63,7 @@ param(
     [string]$FfmpegPath,
     [switch]$NoRecording,
     [switch]$NoFirewall,
+    [string]$ResultFile,
     [switch]$Uninstall,
     [switch]$Purge,
     [switch]$Force
@@ -481,9 +487,15 @@ if (-not $NoPackaging) {
                   Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
         $builtAt = if (Test-Path $agentExe) { (Get-Item $agentExe).LastWriteTimeUtc }
                    else { [datetime]::MinValue }
+        # 主控台建安裝包要用解除安裝自訂動作 DLL。安裝檔夾了預建版；萬一缺了（舊安裝檔、
+        # 或精簡包），就算 exe 是新的也要補建，否則主控台會卡在「找不到 CA.dll」。
+        $caDll = Join-Path $agentSrc "EndpointAgent.CustomActions\bin\Release\net472\EndpointAgent.CustomActions.CA.dll"
+        $srcNewer  = $newest -and $newest.LastWriteTimeUtc -gt $builtAt
+        $caMissing = -not (Test-Path $caDll)
 
-        if ($newest -and $newest.LastWriteTimeUtc -gt $builtAt) {
-            Info "原始碼比 publish\EndpointAgent.exe 新（$($newest.Name)），重新建置…"
+        if ($srcNewer -or $caMissing) {
+            if ($caMissing) { Info "缺少解除安裝自訂動作 DLL，建置 Agent（含 CA.dll）…" }
+            else { Info "原始碼比 publish\EndpointAgent.exe 新（$($newest.Name)），重新建置…" }
             if (Ensure-DotnetSdk) {
                 # 開子行程執行：build.ps1 自己設 ErrorActionPreference='Stop'，
                 # 而 dotnet 的 stderr 在那個設定下會變成致命錯誤，會把整支安裝
@@ -749,15 +761,23 @@ print(''.join(chars))
 $env:EEM_BOOTSTRAP_SECRET = & $VenvPy -c "import secrets;print(secrets.token_urlsafe(32))"
 $out = Invoke-Flask -FlaskArgs @("bootstrap-super-admin", "--username", $AdminUser, "--password-stdin") -StdIn $password
 $bootstrapRc = $LASTEXITCODE
-Remove-Item Env:\EEM_BOOTSTRAP_SECRET -ErrorAction SilentlyContinue
 if ($bootstrapRc -eq 0) {
     Ok "已建立最高管理員 $AdminUser"
 } elseif ($out -match "already exists") {
-    Ok "已有最高管理員，略過建立"
-    $newPassword = $null
+    # 帳號已存在：每次安裝都把密碼重設成本次這一組，讓管理者一定拿得到可登入的
+    # 密碼（雜湊無法還原舊密碼）。這會撤銷該帳號目前所有登入階段；資料庫與錄影不動。
+    # 沿用同一個 EEM_BOOTSTRAP_SECRET 恢復視窗。
+    $out = Invoke-Flask -FlaskArgs @("reset-password", "--username", $AdminUser, "--password-stdin") -StdIn $password
+    if ($LASTEXITCODE -ne 0) {
+        $out; Remove-Item Env:\EEM_BOOTSTRAP_SECRET -ErrorAction SilentlyContinue
+        Die "重設最高管理員密碼失敗。"
+    }
+    Ok "已重設最高管理員 $AdminUser 的密碼（舊登入階段已失效）"
 } else {
-    $out; Die "建立最高管理員失敗。"
+    $out; Remove-Item Env:\EEM_BOOTSTRAP_SECRET -ErrorAction SilentlyContinue
+    Die "建立最高管理員失敗。"
 }
+Remove-Item Env:\EEM_BOOTSTRAP_SECRET -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------- MSI 工具鏈
 
@@ -771,7 +791,7 @@ if (-not $NoPackaging) {
 
     if ($dotnet) {
         # 服務以 SYSTEM 執行，找不到使用者層級的 dotnet tool，所以把 wix 裝在安裝目錄下。
-        # （不覆寫 USERPROFILE：WiX 不看那個變數，覆寫只會讓下面找不到剛裝好的擴充。）
+        # （擴充的位置由 WIX_EXTENSIONS 決定，見下面；不要去覆寫 USERPROFILE。）
         $env:DOTNET_CLI_HOME = $HomeDir
         $prevPref = $ErrorActionPreference
         $ErrorActionPreference = "Continue"   # 同 Invoke-Flask：原生程式的 stderr 不是致命錯誤
@@ -780,24 +800,54 @@ if (-not $NoPackaging) {
                 & $dotnet tool install --tool-path $wixDir wix --version "5.*" 2>&1 | Out-Null
             }
             if (Test-Path $wixExe) {
-                & $wixExe extension add -g WixToolset.Util.wixext/5.0.2 2>&1 | Out-Null
-                & $wixExe extension add -g WixToolset.Firewall.wixext/5.0.2 2>&1 | Out-Null
-                # 安裝精靈（下一步、選安裝位置）的畫面來自 UI 擴充。
-                & $wixExe extension add -g WixToolset.UI.wixext/5.0.2 2>&1 | Out-Null
-                # WiX 是用 Windows 的使用者設定檔 API 去找 .wix\extensions，**不看**
-                # USERPROFILE 環境變數，所以擴充一定會裝進「執行安裝的管理員」設定檔。
-                # 服務以 SYSTEM 執行，不複製過去的話建置會失敗：
+                # WiX 5 找擴充的順序：目前目錄\.wix\extensions →「WIX_EXTENSIONS 環境變數，
+                # 沒設才用使用者設定檔」\.wix\extensions（WixToolset.Core ExtensionManager）。
+                # 服務以 SYSTEM 執行，設定檔跟安裝者不同，曾因此在新機器上一直：
                 #   error WIX0144: The extension 'WixToolset.Util.wixext' could not be found
-                $srcWix = Join-Path $env:USERPROFILE ".wix"
-                $sysProfileRaw = (Get-ItemProperty `
-                    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18" `
-                    -ErrorAction SilentlyContinue).ProfileImagePath
-                if ($sysProfileRaw -and (Test-Path $srcWix)) {
-                    $sysProfile = [Environment]::ExpandEnvironmentVariables($sysProfileRaw)
-                    robocopy $srcWix (Join-Path $sysProfile ".wix") /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
-                    Ok "WiX 5 與擴充已就緒（服務帳號可用）"
+                # 所以安裝與服務都把 WIX_EXTENSIONS 指到安裝目錄下的 home：在這裡下載、從這裡找，
+                # 不再碰任何使用者或 SYSTEM 設定檔（.env 與 run-server.cmd 都會設這個變數）。
+                # UI 擴充提供安裝精靈（下一步、選安裝位置）的畫面。
+                $wixExtIds   = @("WixToolset.Util.wixext/5.0.2",
+                                 "WixToolset.Firewall.wixext/5.0.2",
+                                 "WixToolset.UI.wixext/5.0.2")
+                $wixExtNames = @("WixToolset.Util.wixext",
+                                 "WixToolset.Firewall.wixext",
+                                 "WixToolset.UI.wixext")
+                # 驗證某個 .wix 目錄底下三個擴充的 DLL 都在（直接看檔案，不靠工具的退出碼
+                # ——過去就因為「悄悄沒裝成功卻報就緒」導致事後才爆 WIX0144）。
+                $HasWixExts = {
+                    param([string]$WixDir)
+                    $extDir = Join-Path $WixDir "extensions"
+                    if (-not (Test-Path $extDir)) { return $false }
+                    foreach ($n in $wixExtNames) {
+                        $dll = Get-ChildItem -Path (Join-Path $extDir $n) -Recurse -Filter "$n.dll" `
+                                   -ErrorAction SilentlyContinue
+                        if (-not $dll) { return $false }
+                    }
+                    return $true
+                }
+
+                $env:WIX_EXTENSIONS = $HomeDir
+                $homeWix = Join-Path $HomeDir ".wix"
+                foreach ($id in $wixExtIds) { & $wixExe extension add -g $id 2>&1 | Out-Null }
+                # 下載偶爾會逾時：還缺就再補一次。
+                if (-not (& $HasWixExts $homeWix)) {
+                    foreach ($id in $wixExtIds) { & $wixExe extension add -g $id 2>&1 | Out-Null }
+                }
+                # 還是沒有（離線、擋 NuGet）：安裝者自己的設定檔若有現成的擴充（之前裝過），搬過來。
+                if (-not (& $HasWixExts $homeWix)) {
+                    $userWix = Join-Path $env:USERPROFILE ".wix"
+                    if (& $HasWixExts $userWix) {
+                        robocopy $userWix $homeWix /E /NFL /NDL /NJH /NJS /NP | Out-Null
+                    }
+                }
+
+                if (& $HasWixExts $homeWix) {
+                    Ok "WiX 5 與擴充已就緒（已確認 $homeWix\extensions 含三個擴充）"
                 } else {
-                    Warn "WiX 擴充複製到 SYSTEM 設定檔失敗，主控台建置安裝包時可能會找不到擴充。"
+                    Warn "WiX 擴充未能裝進 $homeWix\extensions（多半是連不到 NuGet 下載）。"
+                    Warn "主控台建安裝包會失敗（WIX0144）。請確認可連網後重跑本腳本，"
+                    Warn "或把一台已裝好的機器的 %USERPROFILE%\.wix 整個資料夾複製到 $homeWix 後重啟服務。"
                 }
             } else {
                 Warn "WiX 安裝失敗，主控台的「安裝包」頁會顯示缺少工具。"
@@ -813,6 +863,10 @@ if (-not $NoPackaging) {
         $envText = Get-Content $envPath -Raw
         if ($envText -notmatch "EEM_WIX_COMMAND=") {
             Add-Content -Path $envPath -Value "EEM_WIX_COMMAND=$wixExe" -Encoding UTF8
+        }
+        # 服務建安裝包時 wix 從這裡找擴充（wsgi.py 會把 .env 載入環境變數，wix 子行程繼承）。
+        if ($envText -notmatch "WIX_EXTENSIONS=") {
+            Add-Content -Path $envPath -Value "WIX_EXTENSIONS=$HomeDir" -Encoding UTF8
         }
     }
 }
@@ -1004,8 +1058,9 @@ $runner = Join-Path $AppDir "run-server.cmd"
 @"
 @echo off
 rem 由 install.ps1 產生。排程工作 $TaskName 會呼叫這支。
-rem 不要覆寫 USERPROFILE：WiX 是用設定檔 API 找擴充套件的，覆寫了反而找不到。
+rem WiX 從 WIX_EXTENSIONS\.wix\extensions 找擴充（install.ps1 把擴充裝在這裡）；不要覆寫 USERPROFILE。
 set "DOTNET_CLI_HOME=$HomeDir"
+set "WIX_EXTENSIONS=$HomeDir"
 set "PYTHONUNBUFFERED=1"
 cd /d "$AppDir"
 "$VenvPy" wsgi.py >> "$AppDir\instance\server.log" 2>&1
@@ -1057,7 +1112,41 @@ if ($healthy) {
 } else {
     Warn "伺服器沒有在 40 秒內回應。記錄檔最後 20 行："
     Get-Content (Join-Path $AppDir "instance\server.log") -Tail 20 -ErrorAction SilentlyContinue
-    Die "啟動失敗。修正後可直接重跑本腳本。"
+    # 圖形安裝精靈靠結果檔（下面）判斷成敗 —— 這裡先別 Die，讓它寫得出 healthy=0，
+    # 精靈才能顯示「未完成、請看記錄檔」而不是把視窗一關就沒有線索。
+    if (-not $ResultFile) { Die "啟動失敗。修正後可直接重跑本腳本。" }
+    else { Warn "安裝精靈會回報未完成；修正問題後重新執行安裝精靈即可（資料會保留）。" }
+}
+
+# ---------------------------------------------------------------- 結果檔（給安裝精靈）
+# 只在指定 -ResultFile 時寫。值都是 ASCII（密碼是英數字），用 GetPrivateProfileString
+# 讀得到。密碼在本次由安裝程式自動產生時才有值（$newPassword）——不論新建或重設；
+# 只有以 EEM_ADMIN_PASSWORD 指定自訂密碼時才留空（你已知道那組密碼）。
+if ($ResultFile) {
+    $rsuffix    = if ($Port -eq 443) { "" } else { ":$Port" }
+    $rpw        = if ($newPassword) { $newPassword } else { "" }
+    $rrec       = if ($ffReady) { "1" } else { "0" }
+    $rhealthy   = if ($healthy) { "1" } else { "0" }
+    $rip        = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                    Where-Object { $_.IPAddress -ne "127.0.0.1" -and $_.PrefixOrigin -ne "WellKnown" } |
+                    Select-Object -ExpandProperty IPAddress -Unique | Select-Object -First 1)
+    $rlan       = if ($rip) { "https://$rip$rsuffix" } else { "" }
+    try {
+        @(
+            "[result]"
+            "url=https://localhost$rsuffix"
+            "lanUrl=$rlan"
+            "adminUser=$AdminUser"
+            "adminPassword=$rpw"
+            "recording=$rrec"
+            "certKind=$certKind"
+            "healthy=$rhealthy"
+            "installDir=$InstallDir"
+            "port=$Port"
+        ) -join "`r`n" | Set-Content -LiteralPath $ResultFile -Encoding ASCII
+    } catch {
+        Warn "無法寫入結果檔 $ResultFile：$($_.Exception.Message)"
+    }
 }
 
 Step "部署前檢查（flask check-config）"
@@ -1082,7 +1171,7 @@ if ($newPassword) {
     Write-Host "  管理員密碼   $newPassword   " -NoNewline
     Write-Host "← 只顯示這一次，請立刻保存" -ForegroundColor Yellow
 } else {
-    Write-Host "  管理員帳號   $AdminUser（沿用既有密碼）"
+    Write-Host "  管理員帳號   $AdminUser（使用你指定的 EEM_ADMIN_PASSWORD）"
 }
 Write-Host ""
 Write-Host "  安裝位置     $AppDir"

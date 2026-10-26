@@ -18,11 +18,12 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import tempfile
 from pathlib import Path
 
-from flask import current_app
+from flask import current_app, has_request_context, request
 
 from .signing import SigningSettings, sign_file
 
@@ -85,6 +86,7 @@ def toolchain_status() -> dict:
             "wixCommand": wix_command,
             "certificateEmbedded": False,
             "signingEnabled": bool(config.get("SIGNING_ENABLED")),
+            "serverUrl": suggested_server_url(),
         }
 
     problems = []
@@ -117,7 +119,53 @@ def toolchain_status() -> dict:
         # Whether generated MSIs will be signed. Unsigned is allowed but worth
         # surfacing so the console can warn.
         "signingEnabled": bool(config.get("SIGNING_ENABLED")),
+        # What the console pre-fills as the agents' management server URL.
+        "serverUrl": suggested_server_url(),
     }
+
+
+def suggested_server_url() -> str | None:
+    """The address endpoints should be told to call home to.
+
+    The console is routinely opened as https://localhost -- the installer's
+    finish page does exactly that -- and baking localhost into a package makes
+    every endpoint call itself. EEM_PUBLIC_URL wins when set. Otherwise this
+    host's LAN address, with the scheme and port the console request itself
+    arrived on (no proxy in the supported Windows deployment, so those are the
+    server's own). None when neither is known, so callers fall back to the
+    request's URL.
+    """
+    explicit = current_app.config.get("PUBLIC_URL")
+    if explicit:
+        return explicit
+    if not has_request_context():
+        return None
+    address = _primary_ipv4()
+    if address is None:
+        return None
+    _, _, port = request.host.partition(":")
+    return f"{request.scheme}://{address}" + (f":{port}" if port else "")
+
+
+def _primary_ipv4() -> str | None:
+    """This host's LAN address: the one its default route would use.
+
+    Connecting a UDP socket sends nothing; it only makes the OS pick the
+    source address. TEST-NET-1 is never routable, so no real host is involved.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("192.0.2.1", 9))
+            address = sock.getsockname()[0]
+    except OSError:
+        # No default route (an isolated LAN): fall back to the hostname's address.
+        try:
+            address = socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return None
+    if address.startswith("127.") or address == "0.0.0.0":
+        return None
+    return address
 
 
 _PEM_CERT = re.compile(

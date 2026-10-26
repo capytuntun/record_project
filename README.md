@@ -15,13 +15,20 @@
 為防止內部員工蓄意規避稽核或惡意程式破壞，部署於終端設備上的 Agent 具備極高的防篡改（Tamper Protection）層級。使用者無法輕易透過工作管理員強制結束處理程序；若要停止服務或移除端點代理程式，必須輸入由中控端配發的專屬密碼，確保側錄政策的強制性與系統的完整性。
 
 ## 安裝方式
-**以系統管理員身分**開啟 PowerShell，執行：
+
+**圖形安裝精靈（下一步、下一步）** — 把 `EEMServerSetup-<版本>.exe` 複製到目標電腦，
+按兩下、依畫面操作即可；最後一頁顯示網址與只顯示一次的管理員密碼。這個 `.exe` 用
+`server\packaging\Build-ServerSetup.ps1` 打包產生（詳見
+[`docs/deployment-windows.md`](docs/deployment-windows.md) §1A）。
+
+**或用 PowerShell 一行** — **以系統管理員身分**開啟 PowerShell，執行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File server\install.ps1
 ```
 
-跑完就是可以登入的系統，最後會印出網址與管理員密碼，密碼只會顯示一次
+兩種方式結果相同（背後都是 `install.ps1`）。跑完就是可以登入的系統，最後會印出
+網址與管理員密碼，密碼只會顯示一次。
 
 ## 移除伺服器
 **以系統管理員身分**開啟 PowerShell，在專案根目錄執行：

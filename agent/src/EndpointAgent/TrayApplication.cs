@@ -94,7 +94,7 @@ internal sealed class TrayContext : ApplicationContext
         {
             Icon = BuildIcon(),
             Visible = true,
-            Text = Truncate($"端點管理 Agent\n本機由企業 IT 管理\n伺服器：{HostOf(config.ServerUrl)}"),
+            Text = Truncate("端點管理 Agent\n本機由企業 IT 管理"),
             ContextMenuStrip = BuildMenu(),
         };
         _icon.DoubleClick += (_, _) => ShowStatus();
@@ -128,7 +128,6 @@ internal sealed class TrayContext : ApplicationContext
         var enrolled = !string.IsNullOrEmpty(_config.EndpointId);
         MessageBox.Show(
             $"端點管理 Agent\n\n" +
-            $"管理伺服器：{_config.ServerUrl}\n" +
             $"組織：{_config.OrganizationId ?? "（未設定）"}\n" +
             $"註冊狀態：{(enrolled ? "已註冊" : "尚未註冊")}\n" +
             $"端點識別碼：{_config.EndpointId ?? "（尚未取得）"}\n\n" +
@@ -172,12 +171,6 @@ internal sealed class TrayContext : ApplicationContext
         }
         _ownedIcon = Icon.FromHandle(bitmap.GetHicon());
         return _ownedIcon;
-    }
-
-    private static string HostOf(string url)
-    {
-        var i = url.IndexOf("://", StringComparison.Ordinal);
-        return i >= 0 ? url[(i + 3)..].TrimEnd('/') : url;
     }
 
     private static string Truncate(string s) => s.Length <= 127 ? s : s[..127];

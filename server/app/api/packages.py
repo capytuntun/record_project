@@ -343,6 +343,10 @@ def _resolve_server_url(body: dict) -> str:
     """
     supplied = get_str(body, "serverUrl", required=False, max_length=255)
     url = supplied or request.url_root.rstrip("/")
+    if not supplied and _is_loopback(url):
+        # The console was opened as localhost; endpoints must not be told to
+        # call themselves. Use the address this server is reachable on instead.
+        url = packaging.suggested_server_url() or url
 
     if not url.startswith(("https://", "http://")):
         raise ValidationError("伺服器網址必須以 https:// 或 http:// 開頭。")

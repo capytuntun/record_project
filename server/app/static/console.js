@@ -2450,70 +2450,6 @@ $("create-recording-form").addEventListener("submit", (event) => {
 
 /* ── 安裝包（MSI）產生器 ──────────────────────────────── */
 
-/* ── 重建 Agent 程式 ────────────────────────────────────────
- *
- * 產生安裝包只是把「事先建好的 EndpointAgent.exe」重新包一次(約 6 秒),
- * 不會編譯 C#。所以改了 Agent 原始碼卻沒重建,產出的安裝包會裝到舊程式,
- * 而且完全沒有徵兆 —— 這裡負責讓那件事看得見,並且可以直接在網頁上修好。 */
-
-async function loadAgentBuild() {
-  const note = $("agent-build-note");
-  const button = $("agent-rebuild");
-
-  let data;
-  try {
-    data = await request("GET", "/api/packages/agent-build");
-  } catch {
-    note.hidden = true; button.hidden = true; return;
-  }
-
-  const build = data.build || {};
-  const running = build.status === "RUNNING";
-
-  // 重建的是會裝到每一台端點的執行檔,比產生單一安裝包更敏感 —— 僅最高管理員。
-  button.hidden = !(state.user.role === "SUPER_ADMIN" && data.canRebuild);
-  button.disabled = running;
-  button.textContent = running ? "重建中…" : "重建 Agent 程式";
-
-  const show = (text, bad) => {
-    note.textContent = text;
-    note.classList.toggle("bad", Boolean(bad));
-    note.hidden = false;
-  };
-
-  if (running) {
-    show("正在重建 Agent 程式，需要一到兩分鐘。完成前產生的安裝包仍是舊版。");
-    clearTimeout(loadAgentBuild.timer);
-    // 只在這一頁還開著時繼續輪詢。
-    if (!$("view-tokens").hidden) {
-      loadAgentBuild.timer = setTimeout(() => guard(loadAgentBuild), 5000);
-    }
-    return;
-  }
-  if (build.status === "FAILED") {
-    show(`Agent 重建失敗：${build.message || ""}`, true);
-    return;
-  }
-  if (!data.sourceAvailable) {
-    // 只複製產物、沒帶原始碼的部署方式 —— 沒有東西可講。
-    note.hidden = true;
-    return;
-  }
-  if (data.stale) {
-    show("Agent 原始碼比已建置的執行檔新：現在產生的安裝包會裝到舊版 Agent。"
-       + "請先按「重建 Agent 程式」。", true);
-    return;
-  }
-  if (build.status === "SUCCEEDED") { show(build.message); return; }
-  note.hidden = true;
-}
-
-$("agent-rebuild").addEventListener("click", () => guard(async () => {
-  await request("POST", "/api/packages/agent-build");
-  flash("已開始重建 Agent 程式。");
-  await loadAgentBuild();
-}));
-
 async function loadPackages() {
   // 先確認伺服器具備建置工具，否則按下去只會拿到一個看不懂的錯誤。
   const tools = await request("GET", "/api/packages/toolchain");
@@ -2545,9 +2481,12 @@ async function loadPackages() {
     certNote.hidden = false;
   }
 
-  if (!$("pk-server").value) $("pk-server").value = window.location.origin;
-
-  await loadAgentBuild();
+  // 用 localhost 開主控台（安裝精靈的「開啟主控台」就是）時，不能把 localhost 包進
+  // 安裝包，否則每台端點都會連回自己 —— 改填伺服器端算出來的對外位址。
+  if (!$("pk-server").value) {
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+    $("pk-server").value = (local && tools.serverUrl) ? tools.serverUrl : window.location.origin;
+  }
 
   const data = await request("GET", "/api/packages?pageSize=100");
   fillTable("package-table", data.items.map((p) => {

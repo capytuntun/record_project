@@ -4,7 +4,51 @@
 
 ---
 
-## 1. 一鍵安裝
+## 1. 安裝
+
+有兩種方式，裝出來的結果完全一樣（背後都是同一支 `install.ps1`）：
+
+- **A. 圖形安裝精靈**（推薦給不熟命令列的人）：一個 `.exe`，按兩下、一直按「下一步」。
+- **B. PowerShell 一行**：適合遠端、無人值守或要帶參數。
+
+### 1A. 圖形安裝精靈（下一步、下一步）
+
+把 `EEMServerSetup-<版本>.exe` 複製到目標電腦，按兩下（會要求系統管理員權限），
+依畫面操作：歡迎 → 安裝前須知 → 選安裝位置（預設 `C:\EEM`）→ 設定連接埠與
+管理員帳號 → 勾選要不要螢幕錄影／防火牆／安裝包工具鏈 → 安裝。最後一頁會顯示
+主控台網址與**只顯示一次**的管理員密碼，並可直接開啟主控台。開始選單會留下
+「開啟主控台」與「解除安裝」兩個捷徑。
+
+> 安裝過程會另開一個視窗顯示實際進度（下載 Python／.NET／FFmpeg，可能數分鐘）。
+> 再跑一次同一個精靈 = 就地升級／修復：程式碼更新、**管理員密碼重設成完成頁顯示的新密碼**
+> （舊登入階段失效），資料庫、金鑰與錄影都保留。
+
+**這個 `.exe` 怎麼來？** 在有原始碼的電腦上跑一次打包腳本（需要 .NET SDK；缺
+Inno Setup 會用 winget 自動安裝）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server\packaging\Build-ServerSetup.ps1
+```
+
+產物在 `server\packaging\dist\EEMServerSetup-<日期>.exe`。加 `-Lean` 可不夾帶
+FFmpeg（檔案小很多，但目標電腦要錄影就得安裝時連網下載）。
+
+**無人值守（靜默）安裝：**
+
+```powershell
+EEMServerSetup-<版本>.exe /VERYSILENT /SUPPRESSMSGBOXES
+# 可帶參數：/PORT=8443 /ADMINUSER=itadmin /NORECORDING /NOFIREWALL /NOPACKAGING
+```
+
+> 靜默安裝時密碼只會寫進暫存的安裝記錄（隨精靈結束清除），**不會顯示**。要無人
+> 值守又能掌握密碼，請先設好環境變數 `EEM_ADMIN_PASSWORD` 再安裝，或裝好後到
+> 主控台用另一個最高管理員重設。
+
+**解除安裝：**從「設定 → 應用程式」或開始選單的捷徑移除。精靈會先問要不要連同
+資料庫與錄影一併刪除——預設「否」＝只停服務、移除防火牆規則、資料保留（之後重裝
+可原樣復原）；選「是」才會整個刪掉（無法復原）。
+
+### 1B. PowerShell 一行
 
 **以系統管理員身分**開啟 PowerShell，執行：
 
@@ -106,10 +150,13 @@ C:\EEM\
 - **為什麼用排程工作而不是 Windows 服務**：`python.exe` 不會回應服務控制管理員
   （SCM），用 `sc create` 註冊成服務會啟動失敗。排程工作以「開機觸發 + SYSTEM +
   失敗重啟」達成同樣效果，而且不需要 NSSM 之類的外部工具。
-- **WiX 擴充要複製到 SYSTEM 設定檔**：WiX 是用 Windows 的使用者設定檔 API 找
-  `.wix\extensions`，**不看 `USERPROFILE` 環境變數**。擴充會裝進「執行安裝的管理員」
-  設定檔，而服務以 SYSTEM 執行 —— 沒複製過去的話建置會失敗：
+- **WiX 擴充放在 `C:\EEM\home\.wix\extensions`，用 `WIX_EXTENSIONS` 指過去**：WiX 5
+  找擴充的順序是「目前目錄的 `.wix\extensions`」→「`WIX_EXTENSIONS` 環境變數（沒設才用
+  使用者設定檔）底下的 `.wix\extensions`」。服務以 SYSTEM 執行，設定檔跟安裝者不同，
+  靠設定檔就會在新機器上出現
   `error WIX0144: The extension 'WixToolset.Util.wixext' could not be found`。
+  所以 `install.ps1` 下載擴充時就把 `WIX_EXTENSIONS` 設成 `C:\EEM\home`，並寫進
+  `.env` 與 `run-server.cmd`，安裝與服務找的是同一個地方。
 - **有 `dotnet.exe` 不代表有 SDK**：只裝執行階段（runtime）時 `dotnet.exe` 一樣在，
   但 `dotnet tool install` 需要 SDK。腳本是用 `dotnet --list-sdks` 有沒有輸出來判斷，
   不是看命令存不存在。
@@ -154,6 +201,9 @@ Get-Content C:\EEM\server\instance\server.log -Tail 30   # 記錄
 ```powershell
 powershell -ExecutionPolicy Bypass -File server\install.ps1
 ```
+
+> 每次重跑都會把最高管理員密碼重設成新的一組（結尾印出，舊登入階段失效）。要沿用
+> 自己的密碼，先設環境變數 `EEM_ADMIN_PASSWORD` 再跑。
 
 ### 解除安裝
 
@@ -289,29 +339,18 @@ msiexec /i <下載的>.msi /qn
 `localhost`。要簽章就在 `.env` 設 `EEM_SIGNING_PFX` 與 `EEM_SIGNING_PASSWORD`
 （見 `agent/signing/README.md`）。
 
-### 8.1 改了 Agent 原始碼之後：「重建 Agent 程式」
+### 8.1 改了 Agent 原始碼之後
 
 產生安裝包只是把**事先建好**的 `EndpointAgent.exe` 重新包一次（`wix build`，約
 6 秒），**不會編譯 C#**。這是刻意的：每個安裝包裡的 Agent 執行檔位元組完全相同，
 只有設定檔不同，每產一包就重編是白花分鐘級的時間。
 
-代價是「改了 Agent 原始碼卻沒重建」會裝到舊程式，而且**毫無徵兆**。所以：
+安裝檔夾帶的就是建好的執行檔，一般使用不必管這件事。改了 Agent 原始碼的話：
 
-* 「安裝包」頁會比對原始碼與執行檔的時間戳記，過期時顯示紅字：
-  *「Agent 原始碼比已建置的執行檔新：現在產生的安裝包會裝到舊版 Agent。」*
-* 旁邊的 **「重建 Agent 程式」** 按鈕會在伺服器上跑一次建置（背景執行，約一到
-  兩分鐘，頁面每 5 秒更新狀態）。跑完再產包就是新版。
-* `install.ps1` 也會在原始碼較新時自動重建，所以重跑安裝腳本一樣有效。
+* 重跑 `install.ps1`（或重新執行安裝精靈）：原始碼比執行檔新時會自動重建。
+* 或在開發機的 `agent\` 執行 `build.ps1` 後重新打包安裝檔。
 
-限制與界線：
-
-| 項目 | 說明 |
-| --- | --- |
-| 誰能按 | **僅最高管理員**。這會換掉派送到每一台端點的執行檔，比產生單一安裝包更敏感，所以不隨「安裝包」功能授權一起下放 |
-| 需要什麼 | 伺服器上要有 `C:\EEM\agent\src`（`install.ps1` 會複製）與 .NET SDK |
-| 這不是遠端執行 | 命令列固定寫在程式碼裡，不接受請求傳來的任何參數，跑的是伺服器自己磁碟上、只有系統管理員寫得進去的原始碼。等同於 `agent\build.ps1`，只是換一個入口（CLAUDE.md §16） |
-| 稽核 | 每次啟動重建都寫 `REBUILD_AGENT` |
-| 沒有原始碼時 | 按鈕不出現，回傳 409 並說明要改在有原始碼的機器跑 `agent\build.ps1` |
+主控台「安裝包」頁不再提供「重建 Agent 程式」按鈕。
 
 ---
 
@@ -341,7 +380,7 @@ Start-ScheduledTask -TaskName EEMManagementServer
 | 服務沒起來 | `Get-Content C:\EEM\server\instance\server.log -Tail 30`。常見：443 被其他程式佔用（改 `-Port`） |
 | 443 被佔用 | `Get-NetTCPConnection -LocalPort 443 -State Listen`（IIS、Skype 之類）→ 停掉它或改用 `-Port 8443` 重裝 |
 | 「安裝包」頁說找不到 WiX | 安裝時的 WiX 步驟沒過（沒有 winget、或裝 .NET SDK 失敗）。確認 `dotnet --list-sdks` 有輸出，再重跑 `install.ps1`。訊息括號裡若是 `wix` 而不是完整路徑，代表 `.env` 沒有 `EEM_WIX_COMMAND`——就是這個情況 |
-| MSI 建置失敗 `WIX0144` | WiX 擴充沒進 SYSTEM 設定檔，重跑 `install.ps1` 會修好 |
+| MSI 建置失敗 `WIX0144` | `C:\EEM\home\.wix\extensions` 缺擴充（安裝時下載不到），或 `.env` 沒有 `WIX_EXTENSIONS=C:\EEM\home`。確認可連網後重跑 `install.ps1`；離線就把另一台已裝好機器的 `%USERPROFILE%\.wix` 整個複製到 `C:\EEM\home\.wix` 再重啟服務 |
 | 端點顯示離線 | Agent 的 Server URL 不對，或憑證不受信任（見 §7） |
 | 一般管理員看不到某些頁 | **預設行為**：最高管理員到「管理員 → 功能授權」逐項開放 |
 

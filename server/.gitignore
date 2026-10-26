@@ -13,6 +13,10 @@ instance/packages/
 
 # Recording storage (encrypted screen recordings — sensitive).
 instance/recordings/
+
+# Installer build: staged payload and the compiled EEMServerSetup-*.exe.
+packaging/build/
+packaging/dist/
 # Bundled FFmpeg is committed (zipped: the bare exe is over GitHub's 100MB
 # limit) so install.ps1 needn't download it. See tools/ffmpeg/SOURCE.md.
 # Anything else dropped there -- including an extracted ffmpeg.exe -- stays out.

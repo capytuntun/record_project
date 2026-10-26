@@ -140,6 +140,11 @@ class Config:
         # trusted proxy; otherwise the audit log's source IP is spoofable.
         self.TRUST_PROXY_HEADERS = _bool("EEM_TRUST_PROXY_HEADERS", False)
 
+        # The address generated packages tell endpoints to call home to. Unset,
+        # the server works it out from the host's LAN address (see
+        # packaging.suggested_server_url); set it behind a proxy or DNS name.
+        self.PUBLIC_URL = os.environ.get("EEM_PUBLIC_URL", "").strip().rstrip("/") or None
+
         self.LOG_LEVEL = os.environ.get("EEM_LOG_LEVEL", "INFO").upper()
 
         # --- Installer package generation (section 18) ---------------------
